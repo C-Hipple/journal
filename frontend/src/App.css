@@ -1,38 +1,167 @@
+/* Gruvbox Dark Theme Colors */
+:root {
+  --bg0: #282828;
+  --bg1: #3c3836;
+  --bg2: #504945;
+  --fg0: #fbf1c7;
+  --fg1: #ebdbb2;
+  --fg2: #d5c4a1;
+  --red: #cc241d;
+  --green: #98971a;
+  --yellow: #d79921;
+  --blue: #458588;
+  --purple: #b16286;
+  --aqua: #689d6a;
+  --gray: #a89984;
+  --orange: #d65d0e;
+
+  /* Bright variants */
+  --red-bright: #fb4934;
+  --green-bright: #b8bb26;
+  --yellow-bright: #fabd2f;
+  --blue-bright: #83a598;
+  --purple-bright: #d3869b;
+  --aqua-bright: #8ec07c;
+  --orange-bright: #fe8019;
+}
+
 .App {
   text-align: center;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  background-color: var(--bg0);
+  color: var(--fg1);
+  font-family: 'Inter', sans-serif;
+}
+
+.login-container {
+  background-color: var(--bg0);
+}
+
+.login-form {
+  background: var(--bg1);
+  padding: 2rem;
+  border-radius: 10px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 300px;
+  border: 1px solid var(--bg2);
+}
+
+.password-input {
+  padding: 0.75rem;
+  border-radius: 5px;
+  border: 1px solid var(--bg2);
+  background: var(--bg0);
+  color: var(--fg1);
+  font-size: 1rem;
+}
+
+.password-input:focus {
+  outline: 2px solid var(--orange-bright);
+  border-color: transparent;
+}
+
+.login-button {
+  padding: 0.75rem;
+  border-radius: 5px;
+  border: none;
+  background: var(--orange);
+  color: var(--fg0);
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background 0.2s;
+}
+
+.login-button:hover {
+  background: var(--orange-bright);
+}
+
+.error-message {
+  color: var(--red-bright);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.App-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   font-size: calc(10px + 2vmin);
-  color: white;
+  width: 100%;
 }
 
-.App-link {
-  color: #61dafb;
+.entry-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 80%;
+  max-width: 800px;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.entry-textarea {
+  width: 100%;
+  padding: 1rem;
+  border-radius: 5px;
+  border: 1px solid var(--bg2);
+  background: var(--bg1);
+  color: var(--fg1);
+  font-size: 1.2rem;
+  font-family: 'Inter', sans-serif;
+  resize: vertical;
+  min-height: 200px;
+}
+
+.entry-textarea:focus {
+  outline: 2px solid var(--aqua-bright);
+  border-color: transparent;
+}
+
+.form-footer {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.submit-button {
+  padding: 0.75rem 2rem;
+  border-radius: 5px;
+  border: none;
+  background: var(--aqua);
+  color: var(--bg0);
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.submit-button:hover:not(:disabled) {
+  background: var(--aqua-bright);
+}
+
+.submit-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--bg2);
+  color: var(--gray);
+}
+
+.status-message {
+  font-size: 1rem;
+  color: var(--green-bright);
+}
+
+h1 {
+  color: var(--yellow-bright);
+}
+
+p {
+  color: var(--fg2);
 }

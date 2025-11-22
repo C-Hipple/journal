@@ -24,5 +24,5 @@ docker-run:
 		-e GEMINI_API_TOKEN \
 		-e GIT_USERNAME \
 		-e GIT_REPO_NAME \
-		-v ~/.ssh:/root/.ssh:ro \
+		-e GITHUB_TOKEN \
 		journal-app

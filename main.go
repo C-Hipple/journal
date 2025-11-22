@@ -10,10 +10,13 @@ import (
     "log"
     "net/http"
     "os"
-    "os/exec"
     "path/filepath"
     "sync"
     "time"
+
+    "github.com/go-git/go-git/v5"
+    "github.com/go-git/go-git/v5/plumbing/object"
+    githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 var (
@@ -23,6 +26,7 @@ var (
     geminiToken      string
     gitUsername      string
     gitRepoName      string
+    githubToken      string
     repoDir          = "journal_storage"
 )
 
@@ -93,12 +97,13 @@ func main() {
     // Get Git Config
     gitUsername = os.Getenv("GIT_USERNAME")
     gitRepoName = os.Getenv("GIT_REPO_NAME")
+    githubToken = os.Getenv("GITHUB_TOKEN")
     log.Printf("GIT_USERNAME: %s", gitUsername)
     log.Printf("GIT_REPO_NAME: %s", gitRepoName)
-    if gitUsername != "" && gitRepoName != "" {
+    if gitUsername != "" && gitRepoName != "" && githubToken != "" {
         initGitRepo()
     } else {
-        log.Println("Warning: GIT_USERNAME or GIT_REPO_NAME not set. Git storage disabled.")
+        log.Println("Warning: GIT_USERNAME, GIT_REPO_NAME, or GITHUB_TOKEN not set. Git storage disabled.")
     }
 
     // Serve static files
@@ -188,23 +193,47 @@ func main() {
 
 func initGitRepo() {
     log.Println("Initializing Git repo...")
-    if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+    
+    // Try to open the repo
+    r, err := git.PlainOpen(repoDir)
+    if err == git.ErrRepositoryNotExists {
         // Clone
-        // Using SSH format: git@github.com:User/Repo.git
-        repoURL := fmt.Sprintf("git@github.com:%s/%s.git", gitUsername, gitRepoName)
+        repoURL := fmt.Sprintf("https://github.com/%s/%s.git", gitUsername, gitRepoName)
         log.Printf("Cloning %s into %s...\n", repoURL, repoDir)
-        cmd := exec.Command("git", "clone", repoURL, repoDir)
-        if out, err := cmd.CombinedOutput(); err != nil {
-            log.Printf("Error cloning repo: %v\nOutput: %s", err, out)
+
+        _, err := git.PlainClone(repoDir, false, &git.CloneOptions{
+            URL: repoURL,
+            Auth: &githttp.BasicAuth{
+                Username: gitUsername,
+                Password: githubToken,
+            },
+            Progress: os.Stdout,
+        })
+        if err != nil {
+            log.Printf("Error cloning repo: %v", err)
             return
         }
+    } else if err != nil {
+        log.Printf("Error opening repo: %v", err)
+        return
     } else {
         // Pull
         log.Println("Pulling latest changes...")
-        cmd := exec.Command("git", "-C", repoDir, "pull")
-        if out, err := cmd.CombinedOutput(); err != nil {
-            log.Printf("Error pulling repo: %v\nOutput: %s", err, out)
-            // Don't return, might just be network issue, try to proceed
+        w, err := r.Worktree()
+        if err != nil {
+            log.Printf("Error getting worktree: %v", err)
+        } else {
+            err = w.Pull(&git.PullOptions{
+                RemoteName: "origin",
+                Auth: &githttp.BasicAuth{
+                    Username: gitUsername,
+                    Password: githubToken,
+                },
+                Progress: os.Stdout,
+            })
+            if err != nil && err != git.NoErrAlreadyUpToDate {
+                log.Printf("Error pulling repo: %v", err)
+            }
         }
     }
 
@@ -270,7 +299,7 @@ func processEntry(content string) {
     f.Close()
 
     // Sync with Git if enabled
-    if gitUsername != "" && gitRepoName != "" {
+    if gitUsername != "" && gitRepoName != "" && githubToken != "" {
         syncGit()
     }
 }
@@ -278,25 +307,49 @@ func processEntry(content string) {
 func syncGit() {
     log.Println("Syncing with Git...")
 
+    r, err := git.PlainOpen(repoDir)
+    if err != nil {
+        log.Printf("Error opening repo: %v", err)
+        return
+    }
+
+    w, err := r.Worktree()
+    if err != nil {
+        log.Printf("Error getting worktree: %v", err)
+        return
+    }
+
     // git add journal.org
-    cmdAdd := exec.Command("git", "-C", repoDir, "add", "journal.org")
-    if out, err := cmdAdd.CombinedOutput(); err != nil {
-        log.Printf("Error adding to git: %v\nOutput: %s", err, out)
+    _, err = w.Add("journal.org")
+    if err != nil {
+        log.Printf("Error adding to git: %v", err)
         return
     }
 
     // git commit
     msg := fmt.Sprintf("Journal entry %s", time.Now().Format("2006-01-02 15:04"))
-    cmdCommit := exec.Command("git", "-C", repoDir, "commit", "-m", msg)
-    if out, err := cmdCommit.CombinedOutput(); err != nil {
-        log.Printf("Error committing to git: %v\nOutput: %s", err, out)
+    _, err = w.Commit(msg, &git.CommitOptions{
+        Author: &object.Signature{
+            Name:  gitUsername,
+            Email: gitUsername + "@users.noreply.github.com", // Fallback email
+            When:  time.Now(),
+        },
+    })
+    if err != nil {
+        log.Printf("Error committing to git: %v", err)
         return
     }
 
     // git push
-    cmdPush := exec.Command("git", "-C", repoDir, "push", "origin", "main")
-    if out, err := cmdPush.CombinedOutput(); err != nil {
-        log.Printf("Error pushing to git: %v\nOutput: %s", err, out)
+    err = r.Push(&git.PushOptions{
+        Auth: &githttp.BasicAuth{
+            Username: gitUsername,
+            Password: githubToken,
+        },
+        Progress: os.Stdout,
+    })
+    if err != nil {
+        log.Printf("Error pushing to git: %v", err)
         return
     }
 

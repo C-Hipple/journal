@@ -20,7 +20,7 @@ docker run -p 8080:8080 \
   -e GEMINI_API_TOKEN \
   -e GIT_USERNAME \
   -e GIT_REPO_NAME \
-  -v ~/.ssh:/root/.ssh:ro \
+  -e GITHUB_TOKEN \
   journal-app
 ```
 
@@ -37,7 +37,7 @@ docker run -p 8080:8080 \
 
 To enable Git sync, you need to:
 1. Provide `GIT_USERNAME` and `GIT_REPO_NAME`.
-2. Mount your SSH keys so the container can authenticate with GitHub.
+2. Provide `GITHUB_TOKEN` (a Personal Access Token with repo scope).
 
 ```bash
 docker run -p 8080:8080 \
@@ -45,11 +45,11 @@ docker run -p 8080:8080 \
   -e GEMINI_API_TOKEN \
   -e GIT_USERNAME \
   -e GIT_REPO_NAME \
-  -v ~/.ssh:/root/.ssh:ro \
+  -e GITHUB_TOKEN \
   journal-app
 ```
 
-**Note:** The container runs as root by default (Alpine), so mounting `~/.ssh` to `/root/.ssh` works. If you change the user in the Dockerfile, adjust the mount path accordingly.
+**Note:** You no longer need to mount SSH keys. The application uses the `GITHUB_TOKEN` to authenticate via HTTPS.
 
 ## Persistence
 

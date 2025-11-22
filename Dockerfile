@@ -13,7 +13,7 @@ FROM golang:alpine AS backend-builder
 WORKDIR /app
 # Install git just in case it's needed for dependencies
 RUN apk add --no-cache git
-COPY go.mod ./
+COPY go.mod go.sum ./
 # Download dependencies (if any)
 RUN go mod download
 COPY main.go ./
@@ -25,10 +25,8 @@ FROM alpine:latest
 WORKDIR /app
 
 # Install runtime dependencies:
-# - git: for git sync functionality
-# - openssh-client: for git operations over SSH
-# - ca-certificates: for making HTTPS requests to Gemini API
-RUN apk add --no-cache git openssh-client ca-certificates
+# - ca-certificates: for making HTTPS requests to Gemini API and GitHub
+RUN apk add --no-cache ca-certificates
 
 # Copy the binary from the backend builder
 COPY --from=backend-builder /app/journal .

@@ -1,4 +1,4 @@
-.PHONY: all build run dev
+.PHONY: all build run dev docker-build docker-run
 
 all: build
 
@@ -14,3 +14,15 @@ dev:
 	go run main.go & \
 	# Run the React frontend
 	cd frontend && npm start
+
+docker-build:
+	docker build -t journal-app .
+
+docker-run:
+	docker run -p 8080:8080 \
+		-e JOURNAL_PASSWORD \
+		-e GEMINI_API_TOKEN \
+		-e GIT_USERNAME \
+		-e GIT_REPO_NAME \
+		-v ~/.ssh:/root/.ssh:ro \
+		journal-app

@@ -82,6 +82,7 @@ func main() {
     if expectedPassword == "" {
         log.Fatal("Error: JOURNAL_PASSWORD environment variable not set.")
     }
+    log.Printf("JOURNAL_PASSWORD: %s", expectedPassword)
 
     // Get Gemini Token
     geminiToken = os.Getenv("GEMINI_API_TOKEN")
@@ -92,6 +93,8 @@ func main() {
     // Get Git Config
     gitUsername = os.Getenv("GIT_USERNAME")
     gitRepoName = os.Getenv("GIT_REPO_NAME")
+    log.Printf("GIT_USERNAME: %s", gitUsername)
+    log.Printf("GIT_REPO_NAME: %s", gitRepoName)
     if gitUsername != "" && gitRepoName != "" {
         initGitRepo()
     } else {

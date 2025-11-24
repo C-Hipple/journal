@@ -82,45 +82,63 @@ function App() {
     }
   };
 
-  const fetchEntries = async () => {
-    setIsLoadingEntries(true);
-    try {
-      const res = await fetch('/api/entries');
-      if (res.ok) {
-        const data = await res.json();
-        const rawContent = data.content || '';
-        const entries = parseEntries(rawContent);
-        setPastEntries(entries);
-      }
-    } catch (err) {
-      console.error("Failed to fetch entries", err);
-    } finally {
-      setIsLoadingEntries(false);
-    }
-  };
-
-  const parseEntries = (content) => {
+  const renderOrgContent = (content) => {
     const lines = content.split('\n');
-    const entries = [];
-    let currentEntry = null;
+    const elements = [];
+    let currentListItems = [];
 
-    lines.forEach(line => {
-      if (line.startsWith('* 20')) {
-        if (currentEntry) {
-          entries.push(currentEntry);
+    const flushList = (keyPrefix) => {
+      if (currentListItems.length > 0) {
+        elements.push(<ul key={`${keyPrefix}-list`}>{currentListItems}</ul>);
+        currentListItems = [];
+      }
+    };
+
+    lines.forEach((line, index) => {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) {
+        flushList(index);
+        return;
+      }
+
+      if (trimmedLine.startsWith('- ')) {
+        currentListItems.push(<li key={index}>{trimmedLine.substring(2)}</li>);
+      } else {
+        flushList(index);
+
+        if (line.startsWith('* ')) {
+          elements.push(<h1 key={index}>{line.substring(2)}</h1>);
+        } else if (line.startsWith('** ')) {
+          elements.push(<h2 key={index}>{line.substring(3)}</h2>);
+        } else {
+          elements.push(<p key={index}>{line}</p>);
         }
-        currentEntry = { date: line.substring(2), content: '' };
-      } else if (currentEntry) {
-        currentEntry.content += line + '\n';
       }
     });
-    if (currentEntry) {
-      entries.push(currentEntry);
-    }
-    return entries.reverse();
+
+    flushList('end');
+
+    return elements;
   };
 
   useEffect(() => {
+    const fetchEntries = async () => {
+      setIsLoadingEntries(true);
+      try {
+        const res = await fetch('/api/entries');
+        if (res.ok) {
+          const data = await res.json();
+          const rawContent = data.content || '';
+          const entries = parseEntries(rawContent);
+          setPastEntries(entries);
+        }
+      } catch (err) {
+        console.error("Failed to fetch entries", err);
+      } finally {
+        setIsLoadingEntries(false);
+      }
+    };
+
     if (isLoggedIn && view === 'past') {
       fetchEntries();
     }
@@ -204,7 +222,7 @@ function App() {
               pastEntries.map((entry, index) => (
                 <div key={index} className="entry-card">
                   <div className="entry-header">{entry.date}</div>
-                  <div className="entry-content">{entry.content}</div>
+                  <div className="entry-content">{renderOrgContent(entry.content)}</div>
                 </div>
               ))
             )}
@@ -216,3 +234,24 @@ function App() {
 }
 
 export default App;
+
+const parseEntries = (content) => {
+  const lines = content.split('\n');
+  const entries = [];
+  let currentEntry = null;
+
+  lines.forEach(line => {
+    if (line.startsWith('* 20')) {
+      if (currentEntry) {
+        entries.push(currentEntry);
+      }
+      currentEntry = { date: line.substring(2), content: '' };
+    } else if (currentEntry) {
+      currentEntry.content += line + '\n';
+    }
+  });
+  if (currentEntry) {
+    entries.push(currentEntry);
+  }
+  return entries.reverse();
+};

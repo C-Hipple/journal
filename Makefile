@@ -4,14 +4,14 @@ all: build
 
 build:
 	cd frontend && npm install && npm run build
-	go build -o journal main.go
+	go build -o journal .
 
 run:
 	./journal
 
 dev:
 	# Run the Go backend in the background
-	go run main.go & \
+	go run . & \
 	# Run the React frontend
 	cd frontend && npm start
 

@@ -17,6 +17,9 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# compiled binary
+journal
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

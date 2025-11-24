@@ -16,9 +16,9 @@ RUN apk add --no-cache git
 COPY go.mod go.sum ./
 # Download dependencies (if any)
 RUN go mod download
-COPY main.go ./
+COPY *.go ./
 # Build the Go binary
-RUN go build -o journal main.go
+RUN go build -o journal .
 
 # Stage 3: Final Production Image
 FROM alpine:latest

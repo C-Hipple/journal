@@ -139,7 +139,9 @@ func main() {
         })
 
         w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(map[string]string{"status": "logged_in"})
+        if err := json.NewEncoder(w).Encode(map[string]string{"status": "logged_in"}); err != nil {
+            log.Printf("Error encoding response: %v", err)
+        }
     })
 
     http.HandleFunc("/api/check-auth", func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +151,9 @@ func main() {
         }
 
         w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(map[string]string{"status": "authenticated"})
+        if err := json.NewEncoder(w).Encode(map[string]string{"status": "authenticated"}); err != nil {
+            log.Printf("Error encoding response: %v", err)
+        }
     })
 
     http.HandleFunc("/api/entries", func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +169,9 @@ func main() {
                 return
             }
             w.WriteHeader(http.StatusOK)
-            json.NewEncoder(w).Encode(map[string]string{"content": entries})
+            if err := json.NewEncoder(w).Encode(map[string]string{"content": entries}); err != nil {
+                log.Printf("Error encoding response: %v", err)
+            }
             return
         }
 
@@ -184,7 +190,9 @@ func main() {
         go processEntry(req.Content)
 
         w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(map[string]string{"status": "created"})
+        if err := json.NewEncoder(w).Encode(map[string]string{"status": "created"}); err != nil {
+            log.Printf("Error encoding response: %v", err)
+        }
     })
 
     log.Println("Listening on :8080...")

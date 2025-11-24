@@ -213,3 +213,21 @@ func SaveEntry(entryContent string) {
 		syncGit()
 	}
 }
+
+func GetEntries() (string, error) {
+	// Determine file path
+	targetFile := "journal.org"
+	if gitUsername != "" && gitRepoName != "" {
+		targetFile = filepath.Join(repoDir, "journal.org")
+	}
+
+	// Read existing file
+	existingBytes, err := os.ReadFile(targetFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(existingBytes), nil
+}

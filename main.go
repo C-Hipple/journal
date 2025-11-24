@@ -153,13 +153,24 @@ func main() {
     })
 
     http.HandleFunc("/api/entries", func(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodPost {
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        if !isAuthenticated(r) {
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
             return
         }
 
-        if !isAuthenticated(r) {
-            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        if r.Method == http.MethodGet {
+            entries, err := GetEntries()
+            if err != nil {
+                http.Error(w, "Failed to retrieve entries", http.StatusInternalServerError)
+                return
+            }
+            w.WriteHeader(http.StatusOK)
+            json.NewEncoder(w).Encode(map[string]string{"content": entries})
+            return
+        }
+
+        if r.Method != http.MethodPost {
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
             return
         }
 

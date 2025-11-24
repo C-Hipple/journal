@@ -296,3 +296,60 @@ p {
   margin-bottom: 0.5rem;
   line-height: 1.5;
 }
+
+/* Tooltip */
+.tooltip-container {
+  display: inline-block;
+  position: relative;
+  margin-left: 0.5rem;
+  cursor: pointer;
+}
+
+.info-icon {
+  font-size: 1.2rem;
+  filter: grayscale(100%);
+  transition: filter 0.2s;
+}
+
+.tooltip-container:hover .info-icon {
+  filter: none;
+}
+
+.tooltip-content {
+  visibility: hidden;
+  width: 300px;
+  background-color: var(--bg0);
+  color: var(--fg1);
+  text-align: left;
+  border-radius: 6px;
+  padding: 1rem;
+  position: absolute;
+  z-index: 1;
+  bottom: 125%;
+  /* Position above */
+  left: 50%;
+  margin-left: -150px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  border: 1px solid var(--bg2);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.tooltip-container:hover .tooltip-content {
+  visibility: visible;
+  opacity: 1;
+}
+
+.tooltip-content strong {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--yellow);
+}
+
+.tooltip-content pre {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: var(--fg2);
+  margin: 0;
+}

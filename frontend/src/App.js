@@ -221,7 +221,18 @@ function App() {
             ) : (
               pastEntries.map((entry, index) => (
                 <div key={index} className="entry-card">
-                  <div className="entry-header">{entry.date}</div>
+                  <div className="entry-header">
+                    {entry.date}
+                    {entry.rawInput && (
+                      <div className="tooltip-container">
+                        <span className="info-icon">🔍</span>
+                        <div className="tooltip-content">
+                          <strong>Raw Input:</strong>
+                          <pre>{entry.rawInput}</pre>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <div className="entry-content">{renderOrgContent(entry.content)}</div>
                 </div>
               ))
@@ -240,10 +251,19 @@ const parseEntries = (content) => {
   const entries = [];
   let currentEntry = null;
 
+  const processEntry = (entry) => {
+    const rawInputMatch = entry.content.match(/\*\* Raw Input\n([\s\S]*)/);
+    if (rawInputMatch) {
+      entry.rawInput = rawInputMatch[1].trim();
+      entry.content = entry.content.replace(rawInputMatch[0], '').trim();
+    }
+    return entry;
+  };
+
   lines.forEach(line => {
     if (line.startsWith('* 20')) {
       if (currentEntry) {
-        entries.push(currentEntry);
+        entries.push(processEntry(currentEntry));
       }
       currentEntry = { date: line.substring(2), content: '' };
     } else if (currentEntry) {
@@ -251,7 +271,7 @@ const parseEntries = (content) => {
     }
   });
   if (currentEntry) {
-    entries.push(currentEntry);
+    entries.push(processEntry(currentEntry));
   }
   return entries.reverse();
 };

@@ -157,7 +157,7 @@ func formatOrgEntry(analysis JournalAnalysis) string {
 	return sb.String()
 }
 
-func SaveEntry(entryContent string) {
+func SaveEntry(analysis JournalAnalysis) {
 	// Determine file path
 	targetFile := "journal.org"
 	if gitUsername != "" && gitRepoName != "" {
@@ -176,25 +176,11 @@ func SaveEntry(entryContent string) {
 	var newFileContent string
 
 	if strings.Contains(existingContent, dateHeader) {
-		// Append to existing entry
-		// Find the location of the date header
-		idx := strings.Index(existingContent, dateHeader)
-
-		// Find the start of the NEXT top-level entry after this one
-		// We look for "\n* " after the current header
-		rest := existingContent[idx+len(dateHeader):]
-		nextHeaderRelIdx := strings.Index(rest, "\n* ")
-
-		if nextHeaderRelIdx == -1 {
-			// No next entry, append to end
-			newFileContent = existingContent + entryContent
-		} else {
-			// Insert before the next entry
-			insertPos := idx + len(dateHeader) + nextHeaderRelIdx
-			newFileContent = existingContent[:insertPos] + entryContent + existingContent[insertPos:]
-		}
+		// Merge into existing entry
+		newFileContent = mergeEntry(existingContent, dateHeader, analysis)
 	} else {
 		// Create new entry
+		entryContent := formatOrgEntry(analysis)
 		prefix := ""
 		if len(existingContent) > 0 && !strings.HasSuffix(existingContent, "\n") {
 			prefix = "\n"
@@ -212,6 +198,80 @@ func SaveEntry(entryContent string) {
 	if gitUsername != "" && gitRepoName != "" && githubToken != "" {
 		syncGit()
 	}
+}
+
+func mergeEntry(content string, dateHeader string, analysis JournalAnalysis) string {
+	idx := strings.Index(content, dateHeader)
+	before := content[:idx]
+
+	rest := content[idx:]
+	// Find end of this entry (start of next date)
+	// We search in rest[len(dateHeader):] to avoid matching the current header if it was somehow ambiguous,
+	// but mainly to find the *next* one.
+	// We look for "\n* " which signifies a new top-level headline.
+	nextEntryRelIdx := strings.Index(rest[len(dateHeader):], "\n* ")
+
+	var entryBlock, after string
+	if nextEntryRelIdx == -1 {
+		entryBlock = rest
+		after = ""
+	} else {
+		splitPos := len(dateHeader) + nextEntryRelIdx
+		entryBlock = rest[:splitPos]
+		after = rest[splitPos:]
+	}
+
+	// Modify entryBlock
+	entryBlock = appendToSection(entryBlock, "** General Emotional Checkin", analysis.EmotionalCheckin)
+
+	for _, item := range analysis.HappyThings {
+		entryBlock = appendToSection(entryBlock, "** Things that made me happy", "- "+item)
+	}
+
+	for _, item := range analysis.StressfulThings {
+		entryBlock = appendToSection(entryBlock, "** Things that were stressful", "- "+item)
+	}
+
+	for _, item := range analysis.FocusItems {
+		entryBlock = appendToSection(entryBlock, "** Things I want to focus on doing for next time", "- "+item)
+	}
+
+	entryBlock = appendToSection(entryBlock, "** Raw Input", analysis.RawInput)
+
+	return before + entryBlock + after
+}
+
+func appendToSection(entryBlock string, sectionHeader string, newItem string) string {
+	idx := strings.Index(entryBlock, sectionHeader)
+	if idx == -1 {
+		// Section missing, append to end of block
+		if !strings.HasSuffix(entryBlock, "\n") {
+			entryBlock += "\n"
+		}
+		return entryBlock + sectionHeader + "\n" + newItem + "\n"
+	}
+
+	// Section exists
+	// Find end of section (start of next section or end of block)
+	// We look for "\n** " after the header
+	rest := entryBlock[idx+len(sectionHeader):]
+	nextSectionIdx := strings.Index(rest, "\n** ")
+
+	if nextSectionIdx == -1 {
+		// No next section, append to end
+		// Ensure there's a newline before appending if needed, though usually there is one.
+		// We want to append at the very end.
+		// If the block ends with newline, just append.
+		suffix := ""
+		if !strings.HasSuffix(entryBlock, "\n") {
+			suffix = "\n"
+		}
+		return entryBlock + suffix + newItem + "\n"
+	}
+
+	// Insert before next section
+	insertPos := idx + len(sectionHeader) + nextSectionIdx
+	return entryBlock[:insertPos] + "\n" + newItem + entryBlock[insertPos:]
 }
 
 func GetEntries() (string, error) {

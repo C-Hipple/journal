@@ -226,10 +226,8 @@ func processEntry(content string) {
 
 	analysis.RawInput = content
 
-    // Format as Org-mode
-    entryContent := formatOrgEntry(analysis)
-
-    SaveEntry(entryContent)
+    // Save the entry (merging if necessary)
+    SaveEntry(analysis)
 }
 
 

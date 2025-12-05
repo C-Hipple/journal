@@ -19,6 +19,7 @@ var (
 	gitRepoName string
 	githubToken string
 	repoDir     = "journal_storage"
+	journalFormat string // "org" or "markdown", default is "markdown"
 )
 
 func initGitRepo() {
@@ -67,12 +68,13 @@ func initGitRepo() {
 		}
 	}
 
-	// Check for journal.org
-	journalPath := filepath.Join(repoDir, "journal.org")
+	// Check for journal file
+	journalFileName := getJournalFileName()
+	journalPath := filepath.Join(repoDir, journalFileName)
 	if _, err := os.Stat(journalPath); os.IsNotExist(err) {
-		log.Println("Creating journal.org...")
+		log.Printf("Creating %s...", journalFileName)
 		if err := os.WriteFile(journalPath, []byte(""), 0644); err != nil {
-			log.Printf("Error creating journal.org: %v", err)
+			log.Printf("Error creating %s: %v", journalFileName, err)
 		}
 	}
 }
@@ -92,8 +94,9 @@ func syncGit() {
 		return
 	}
 
-	// git add journal.org
-	_, err = w.Add("journal.org")
+	// git add journal file
+	journalFileName := getJournalFileName()
+	_, err = w.Add(journalFileName)
 	if err != nil {
 		log.Printf("Error adding to git: %v", err)
 		return
@@ -129,29 +132,84 @@ func syncGit() {
 	log.Println("Git sync successful.")
 }
 
+func getJournalFileName() string {
+	if journalFormat == "org" {
+		return "journal.org"
+	}
+	return "journal.md"
+}
+
+func getDateHeaderFormat() string {
+	if journalFormat == "org" {
+		return "* 2006-01-02 Mon"
+	}
+	return "## 2006-01-02 Mon"
+}
+
+func getTopLevelHeaderPattern() string {
+	if journalFormat == "org" {
+		return "\n* "
+	}
+	return "\n## "
+}
+
+func getSectionHeaderPattern() string {
+	if journalFormat == "org" {
+		return "\n** "
+	}
+	return "\n### "
+}
+
 func formatOrgEntry(analysis JournalAnalysis) string {
 	var sb bytes.Buffer
 
-	sb.WriteString("** General Emotional Checkin\n")
-	sb.WriteString(fmt.Sprintf("%s\n", analysis.EmotionalCheckin))
+	if journalFormat == "org" {
+		sb.WriteString("** General Emotional Checkin\n")
+		sb.WriteString(fmt.Sprintf("%s\n", analysis.EmotionalCheckin))
 
-	sb.WriteString("** Things that made me happy\n")
-	for _, item := range analysis.HappyThings {
-		sb.WriteString(fmt.Sprintf("- %s\n", item))
+		sb.WriteString("** Things that made me happy\n")
+		for _, item := range analysis.HappyThings {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+
+		sb.WriteString("** Things that were stressful\n")
+		for _, item := range analysis.StressfulThings {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+
+		sb.WriteString("** Things I want to focus on doing for next time\n")
+		for _, item := range analysis.FocusItems {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+
+		sb.WriteString("** Raw Input\n")
+		sb.WriteString(fmt.Sprintf("%s\n", analysis.RawInput))
+	} else {
+		// Markdown format
+		sb.WriteString("### General Emotional Checkin\n\n")
+		sb.WriteString(fmt.Sprintf("%s\n\n", analysis.EmotionalCheckin))
+
+		sb.WriteString("### Things that made me happy\n\n")
+		for _, item := range analysis.HappyThings {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+
+		sb.WriteString("### Things that were stressful\n\n")
+		for _, item := range analysis.StressfulThings {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+
+		sb.WriteString("### Things I want to focus on doing for next time\n\n")
+		for _, item := range analysis.FocusItems {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+
+		sb.WriteString("### Raw Input\n\n")
+		sb.WriteString(fmt.Sprintf("%s\n\n", analysis.RawInput))
 	}
-
-	sb.WriteString("** Things that were stressful\n")
-	for _, item := range analysis.StressfulThings {
-		sb.WriteString(fmt.Sprintf("- %s\n", item))
-	}
-
-	sb.WriteString("** Things I want to focus on doing for next time\n")
-	for _, item := range analysis.FocusItems {
-		sb.WriteString(fmt.Sprintf("- %s\n", item))
-	}
-
-	sb.WriteString("** Raw Input\n")
-	sb.WriteString(fmt.Sprintf("%s\n", analysis.RawInput))
 
 	sb.WriteString("\n")
 	return sb.String()
@@ -159,9 +217,10 @@ func formatOrgEntry(analysis JournalAnalysis) string {
 
 func SaveEntry(analysis JournalAnalysis) {
 	// Determine file path
-	targetFile := "journal.org"
+	journalFileName := getJournalFileName()
+	targetFile := journalFileName
 	if gitUsername != "" && gitRepoName != "" {
-		targetFile = filepath.Join(repoDir, "journal.org")
+		targetFile = filepath.Join(repoDir, journalFileName)
 	}
 
 	// Read existing file
@@ -172,7 +231,7 @@ func SaveEntry(analysis JournalAnalysis) {
 	}
 	existingContent := string(existingBytes)
 
-	dateHeader := time.Now().Format("* 2006-01-02 Mon")
+	dateHeader := time.Now().Format(getDateHeaderFormat())
 	var newFileContent string
 
 	if strings.Contains(existingContent, dateHeader) {
@@ -208,8 +267,9 @@ func mergeEntry(content string, dateHeader string, analysis JournalAnalysis) str
 	// Find end of this entry (start of next date)
 	// We search in rest[len(dateHeader):] to avoid matching the current header if it was somehow ambiguous,
 	// but mainly to find the *next* one.
-	// We look for "\n* " which signifies a new top-level headline.
-	nextEntryRelIdx := strings.Index(rest[len(dateHeader):], "\n* ")
+	// We look for the top-level header pattern which signifies a new entry.
+	topLevelPattern := getTopLevelHeaderPattern()
+	nextEntryRelIdx := strings.Index(rest[len(dateHeader):], topLevelPattern)
 
 	var entryBlock, after string
 	if nextEntryRelIdx == -1 {
@@ -222,21 +282,36 @@ func mergeEntry(content string, dateHeader string, analysis JournalAnalysis) str
 	}
 
 	// Modify entryBlock
-	entryBlock = appendToSection(entryBlock, "** General Emotional Checkin", analysis.EmotionalCheckin)
+	var emotionalHeader, happyHeader, stressfulHeader, focusHeader, rawHeader string
+	if journalFormat == "org" {
+		emotionalHeader = "** General Emotional Checkin"
+		happyHeader = "** Things that made me happy"
+		stressfulHeader = "** Things that were stressful"
+		focusHeader = "** Things I want to focus on doing for next time"
+		rawHeader = "** Raw Input"
+	} else {
+		emotionalHeader = "### General Emotional Checkin"
+		happyHeader = "### Things that made me happy"
+		stressfulHeader = "### Things that were stressful"
+		focusHeader = "### Things I want to focus on doing for next time"
+		rawHeader = "### Raw Input"
+	}
+
+	entryBlock = appendToSection(entryBlock, emotionalHeader, analysis.EmotionalCheckin)
 
 	for _, item := range analysis.HappyThings {
-		entryBlock = appendToSection(entryBlock, "** Things that made me happy", "- "+item)
+		entryBlock = appendToSection(entryBlock, happyHeader, "- "+item)
 	}
 
 	for _, item := range analysis.StressfulThings {
-		entryBlock = appendToSection(entryBlock, "** Things that were stressful", "- "+item)
+		entryBlock = appendToSection(entryBlock, stressfulHeader, "- "+item)
 	}
 
 	for _, item := range analysis.FocusItems {
-		entryBlock = appendToSection(entryBlock, "** Things I want to focus on doing for next time", "- "+item)
+		entryBlock = appendToSection(entryBlock, focusHeader, "- "+item)
 	}
 
-	entryBlock = appendToSection(entryBlock, "** Raw Input", analysis.RawInput)
+	entryBlock = appendToSection(entryBlock, rawHeader, analysis.RawInput)
 
 	return before + entryBlock + after
 }
@@ -248,14 +323,19 @@ func appendToSection(entryBlock string, sectionHeader string, newItem string) st
 		if !strings.HasSuffix(entryBlock, "\n") {
 			entryBlock += "\n"
 		}
-		return entryBlock + sectionHeader + "\n" + newItem + "\n"
+		separator := "\n"
+		if journalFormat == "markdown" {
+			separator = "\n\n"
+		}
+		return entryBlock + sectionHeader + separator + newItem + "\n"
 	}
 
 	// Section exists
 	// Find end of section (start of next section or end of block)
-	// We look for "\n** " after the header
+	// We look for the section header pattern after the header
+	sectionPattern := getSectionHeaderPattern()
 	rest := entryBlock[idx+len(sectionHeader):]
-	nextSectionIdx := strings.Index(rest, "\n** ")
+	nextSectionIdx := strings.Index(rest, sectionPattern)
 
 	if nextSectionIdx == -1 {
 		// No next section, append to end
@@ -276,9 +356,10 @@ func appendToSection(entryBlock string, sectionHeader string, newItem string) st
 
 func GetEntries() (string, error) {
 	// Determine file path
-	targetFile := "journal.org"
+	journalFileName := getJournalFileName()
+	targetFile := journalFileName
 	if gitUsername != "" && gitRepoName != "" {
-		targetFile = filepath.Join(repoDir, "journal.org")
+		targetFile = filepath.Join(repoDir, journalFileName)
 	}
 
 	// Read existing file

@@ -106,10 +106,15 @@ function App() {
       } else {
         flushList(index);
 
-        if (line.startsWith('* ')) {
+        // Support both org mode (*, **) and markdown (##, ###) headers
+        if (line.startsWith('* ') && !line.startsWith('** ')) {
           elements.push(<h1 key={index}>{line.substring(2)}</h1>);
         } else if (line.startsWith('** ')) {
           elements.push(<h2 key={index}>{line.substring(3)}</h2>);
+        } else if (line.startsWith('## ')) {
+          elements.push(<h1 key={index}>{line.substring(3)}</h1>);
+        } else if (line.startsWith('### ')) {
+          elements.push(<h2 key={index}>{line.substring(4)}</h2>);
         } else {
           elements.push(<p key={index}>{line}</p>);
         }
@@ -252,7 +257,8 @@ const parseEntries = (content) => {
   let currentEntry = null;
 
   const processEntry = (entry) => {
-    const rawInputMatch = entry.content.match(/\*\* Raw Input\n([\s\S]*)/);
+    // Support both org mode (** Raw Input) and markdown (### Raw Input) formats
+    const rawInputMatch = entry.content.match(/(?:\*\*|###) Raw Input\n+([\s\S]*)/);
     if (rawInputMatch) {
       entry.rawInput = rawInputMatch[1].trim();
       entry.content = entry.content.replace(rawInputMatch[0], '').trim();
@@ -261,11 +267,14 @@ const parseEntries = (content) => {
   };
 
   lines.forEach(line => {
-    if (line.startsWith('* 20')) {
+    // Support both org mode (* 20) and markdown (## 20) date headers
+    if (line.startsWith('* 20') || line.startsWith('## 20')) {
       if (currentEntry) {
         entries.push(processEntry(currentEntry));
       }
-      currentEntry = { date: line.substring(2), content: '' };
+      // Remove the leading * or ## from the date
+      const date = line.startsWith('* ') ? line.substring(2) : line.substring(3);
+      currentEntry = { date: date, content: '' };
     } else if (currentEntry) {
       currentEntry.content += line + '\n';
     }

@@ -86,6 +86,17 @@ func main() {
         log.Println("Warning: GEMINI_API_TOKEN environment variable not set. AI summarization will fail.")
     }
 
+    // Get Journal Format (default to markdown)
+    journalFormat = os.Getenv("JOURNAL_FORMAT")
+    if journalFormat == "" {
+        journalFormat = "markdown"
+    }
+    if journalFormat != "org" && journalFormat != "markdown" {
+        log.Printf("Warning: JOURNAL_FORMAT must be 'org' or 'markdown', defaulting to 'markdown'")
+        journalFormat = "markdown"
+    }
+    log.Printf("JOURNAL_FORMAT: %s", journalFormat)
+
     // Get Git Config
     gitUsername = os.Getenv("GIT_USERNAME")
     gitRepoName = os.Getenv("GIT_REPO_NAME")

@@ -49,7 +49,7 @@ export JOURNAL_PASSWORD="mysecretpassword"
 export GEMINI_API_TOKEN="your_gemini_key"
 export JOURNAL_FORMAT="markdown"  # Optional: "org" or "markdown" (default: "markdown")
 export GIT_USERNAME="your_github_user"
-export GIT_REPO_NAME="your_repo_name"
+export GIT_REPO_NAME="your_repo_name"  # This is where your notes are stored, NOT THIS REPO!!!
 
 # Start the app
 make dev

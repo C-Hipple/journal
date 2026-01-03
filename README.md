@@ -4,7 +4,7 @@ A web-based journaling application that uses Google's Gemini AI to parse unstruc
 
 ## Features
 
--   **AI Analysis**: Uses Gemini 1.5 Flash to break down entries into:
+-   **AI Analysis**: Uses Gemini 2.5 Flash to break down entries into:
     -   Emotional Check-in
     -   Things that made you happy
     -   Things that were stressful
@@ -94,3 +94,7 @@ Feeling productive but slightly tired.
 ** Things I want to focus on doing for next time
 - Take more breaks
 ```
+
+## Deployment
+
+I've just been deploying manually on fly.io with their UI. 

@@ -67,12 +67,14 @@ func initGitRepo() {
 		}
 	}
 
-	// Check for journal.org
-	journalPath := filepath.Join(repoDir, "journal.org")
-	if _, err := os.Stat(journalPath); os.IsNotExist(err) {
-		log.Println("Creating journal.org...")
-		if err := os.WriteFile(journalPath, []byte(""), 0644); err != nil {
-			log.Printf("Error creating journal.org: %v", err)
+	// Check for all journal files
+	for _, config := range EntryTypes {
+		journalPath := filepath.Join(repoDir, config.TargetFile)
+		if _, err := os.Stat(journalPath); os.IsNotExist(err) {
+			log.Printf("Creating %s...\n", config.TargetFile)
+			if err := os.WriteFile(journalPath, []byte(""), 0644); err != nil {
+				log.Printf("Error creating %s: %v", config.TargetFile, err)
+			}
 		}
 	}
 }
@@ -92,8 +94,8 @@ func syncGit() {
 		return
 	}
 
-	// git add journal.org
-	_, err = w.Add("journal.org")
+	// git add .
+	_, err = w.Add(".")
 	if err != nil {
 		log.Printf("Error adding to git: %v", err)
 		return
@@ -129,39 +131,56 @@ func syncGit() {
 	log.Println("Git sync successful.")
 }
 
-func formatOrgEntry(analysis JournalAnalysis) string {
+func formatOrgEntry(entryType string, analysis map[string]interface{}) string {
 	var sb bytes.Buffer
 
-	sb.WriteString("** General Emotional Checkin\n")
-	sb.WriteString(fmt.Sprintf("%s\n", analysis.EmotionalCheckin))
-
-	sb.WriteString("** Things that made me happy\n")
-	for _, item := range analysis.HappyThings {
-		sb.WriteString(fmt.Sprintf("- %s\n", item))
+	config, ok := EntryTypes[entryType]
+	if !ok {
+		config = EntryTypes["journal"]
 	}
 
-	sb.WriteString("** Things that were stressful\n")
-	for _, item := range analysis.StressfulThings {
-		sb.WriteString(fmt.Sprintf("- %s\n", item))
+	for _, field := range config.Fields {
+		header, ok := HeaderMapping[field]
+		if !ok {
+			header = field
+		}
+		sb.WriteString(fmt.Sprintf("** %s\n", header))
+
+		if val, ok := analysis[field]; ok {
+			switch v := val.(type) {
+			case string:
+				sb.WriteString(v + "\n")
+			case []interface{}:
+				for _, item := range v {
+					sb.WriteString(fmt.Sprintf("- %v\n", item))
+				}
+			case []string:
+				for _, item := range v {
+					sb.WriteString(fmt.Sprintf("- %s\n", item))
+				}
+			}
+		}
 	}
 
-	sb.WriteString("** Things I want to focus on doing for next time\n")
-	for _, item := range analysis.FocusItems {
-		sb.WriteString(fmt.Sprintf("- %s\n", item))
+	if raw, ok := analysis["RawInput"].(string); ok {
+		sb.WriteString("** Raw Input\n")
+		sb.WriteString(raw + "\n")
 	}
-
-	sb.WriteString("** Raw Input\n")
-	sb.WriteString(fmt.Sprintf("%s\n", analysis.RawInput))
 
 	sb.WriteString("\n")
 	return sb.String()
 }
 
-func SaveEntry(analysis JournalAnalysis) {
+func SaveEntry(entryType string, analysis map[string]interface{}) {
+	config, ok := EntryTypes[entryType]
+	if !ok {
+		config = EntryTypes["journal"]
+	}
+
 	// Determine file path
-	targetFile := "journal.org"
+	targetFile := config.TargetFile
 	if gitUsername != "" && gitRepoName != "" {
-		targetFile = filepath.Join(repoDir, "journal.org")
+		targetFile = filepath.Join(repoDir, config.TargetFile)
 	}
 
 	// Read existing file
@@ -177,10 +196,10 @@ func SaveEntry(analysis JournalAnalysis) {
 
 	if strings.Contains(existingContent, dateHeader) {
 		// Merge into existing entry
-		newFileContent = mergeEntry(existingContent, dateHeader, analysis)
+		newFileContent = mergeEntry(entryType, existingContent, dateHeader, analysis)
 	} else {
 		// Create new entry
-		entryContent := formatOrgEntry(analysis)
+		entryContent := formatOrgEntry(entryType, analysis)
 		prefix := ""
 		if len(existingContent) > 0 && !strings.HasSuffix(existingContent, "\n") {
 			prefix = "\n"
@@ -200,15 +219,12 @@ func SaveEntry(analysis JournalAnalysis) {
 	}
 }
 
-func mergeEntry(content string, dateHeader string, analysis JournalAnalysis) string {
+func mergeEntry(entryType string, content string, dateHeader string, analysis map[string]interface{}) string {
 	idx := strings.Index(content, dateHeader)
 	before := content[:idx]
 
 	rest := content[idx:]
 	// Find end of this entry (start of next date)
-	// We search in rest[len(dateHeader):] to avoid matching the current header if it was somehow ambiguous,
-	// but mainly to find the *next* one.
-	// We look for "\n* " which signifies a new top-level headline.
 	nextEntryRelIdx := strings.Index(rest[len(dateHeader):], "\n* ")
 
 	var entryBlock, after string
@@ -221,22 +237,37 @@ func mergeEntry(content string, dateHeader string, analysis JournalAnalysis) str
 		after = rest[splitPos:]
 	}
 
-	// Modify entryBlock
-	entryBlock = appendToSection(entryBlock, "** General Emotional Checkin", analysis.EmotionalCheckin)
-
-	for _, item := range analysis.HappyThings {
-		entryBlock = appendToSection(entryBlock, "** Things that made me happy", "- "+item)
+	config, ok := EntryTypes[entryType]
+	if !ok {
+		config = EntryTypes["journal"]
 	}
 
-	for _, item := range analysis.StressfulThings {
-		entryBlock = appendToSection(entryBlock, "** Things that were stressful", "- "+item)
+	for _, field := range config.Fields {
+		header, ok := HeaderMapping[field]
+		if !ok {
+			header = field
+		}
+		sectionHeader := "** " + header
+
+		if val, ok := analysis[field]; ok {
+			switch v := val.(type) {
+			case string:
+				entryBlock = appendToSection(entryBlock, sectionHeader, v)
+			case []interface{}:
+				for _, item := range v {
+					entryBlock = appendToSection(entryBlock, sectionHeader, "- "+fmt.Sprint(item))
+				}
+			case []string:
+				for _, item := range v {
+					entryBlock = appendToSection(entryBlock, sectionHeader, "- "+item)
+				}
+			}
+		}
 	}
 
-	for _, item := range analysis.FocusItems {
-		entryBlock = appendToSection(entryBlock, "** Things I want to focus on doing for next time", "- "+item)
+	if raw, ok := analysis["RawInput"].(string); ok {
+		entryBlock = appendToSection(entryBlock, "** Raw Input", raw)
 	}
-
-	entryBlock = appendToSection(entryBlock, "** Raw Input", analysis.RawInput)
 
 	return before + entryBlock + after
 }
@@ -274,11 +305,16 @@ func appendToSection(entryBlock string, sectionHeader string, newItem string) st
 	return entryBlock[:insertPos] + "\n" + newItem + entryBlock[insertPos:]
 }
 
-func GetEntries() (string, error) {
+func GetEntries(entryType string) (string, error) {
+	config, ok := EntryTypes[entryType]
+	if !ok {
+		config = EntryTypes["journal"]
+	}
+
 	// Determine file path
-	targetFile := "journal.org"
+	targetFile := config.TargetFile
 	if gitUsername != "" && gitRepoName != "" {
-		targetFile = filepath.Join(repoDir, "journal.org")
+		targetFile = filepath.Join(repoDir, config.TargetFile)
 	}
 
 	// Read existing file

@@ -27,6 +27,7 @@ type LoginRequest struct {
 
 type EntryRequest struct {
     Content string `json:"content"`
+    Type    string `json:"type"`
 }
 
 // Gemini API Structs
@@ -52,13 +53,52 @@ type GeminiResponse struct {
     } `json:"candidates"`
 }
 
-// Struct to parse the JSON response from Gemini
-type JournalAnalysis struct {
-    EmotionalCheckin string   `json:"emotional_checkin"`
-    HappyThings      []string `json:"happy_things"`
-    StressfulThings  []string `json:"stressful_things"`
-    FocusItems       []string `json:"focus_items"`
-	RawInput         string   `json:"-"` // Not from JSON, populated manually
+// HeaderMapping defines the display headers for Org mode
+var HeaderMapping = map[string]string{
+	"emotional_checkin": "General Emotional Checkin",
+	"happy_things":      "Things that made me happy",
+	"stressful_things":  "Things that were stressful",
+	"focus_items":       "Things I want to focus on doing for next time",
+	"summary":           "Summary",
+	"notes":             "Notes",
+}
+
+type EntryTypeConfig struct {
+	Name       string
+	Prompt     string
+	TargetFile string
+	Fields     []string
+}
+
+var EntryTypes = map[string]EntryTypeConfig{
+	"journal": {
+		Name: "Journal",
+		Prompt: `Analyze the following journal entry and provide a structured response in JSON format.
+The JSON should have the following fields:
+- "emotional_checkin": A general assessment of the emotional state.
+- "happy_things": A list of things that made the author happy.
+- "stressful_things": A list of things that were stressful.
+- "focus_items": A list of things the author wants to focus on for next time.
+
+Journal Entry:
+"%s"
+`,
+		TargetFile: "journal.org",
+		Fields:     []string{"emotional_checkin", "happy_things", "stressful_things", "focus_items"},
+	},
+	"notes": {
+		Name: "Notes",
+		Prompt: `Structure the following thought into bullet notes and include a key summary. Provide a structured response in JSON format.
+The JSON should have the following fields:
+- "summary": A brief summary of the thought.
+- "notes": A list of bullet points.
+
+Thought:
+"%s"
+`,
+		TargetFile: "notes.org",
+		Fields:     []string{"summary", "notes"},
+	},
 }
 
 func isAuthenticated(r *http.Request) bool {
@@ -156,6 +196,27 @@ func main() {
         }
     })
 
+    http.HandleFunc("/api/types", func(w http.ResponseWriter, r *http.Request) {
+        if !isAuthenticated(r) {
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+            return
+        }
+
+        type TypeInfo struct {
+            ID   string `json:"id"`
+            Name string `json:"name"`
+        }
+        var types []TypeInfo
+        for id, config := range EntryTypes {
+            types = append(types, TypeInfo{ID: id, Name: config.Name})
+        }
+
+        w.WriteHeader(http.StatusOK)
+        if err := json.NewEncoder(w).Encode(types); err != nil {
+            log.Printf("Error encoding response: %v", err)
+        }
+    })
+
     http.HandleFunc("/api/entries", func(w http.ResponseWriter, r *http.Request) {
         if !isAuthenticated(r) {
             http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -163,7 +224,11 @@ func main() {
         }
 
         if r.Method == http.MethodGet {
-            entries, err := GetEntries()
+            entryType := r.URL.Query().Get("type")
+            if entryType == "" {
+                entryType = "journal"
+            }
+            entries, err := GetEntries(entryType)
             if err != nil {
                 http.Error(w, "Failed to retrieve entries", http.StatusInternalServerError)
                 return
@@ -187,7 +252,10 @@ func main() {
         }
 
         // Process the entry asynchronously
-        go processEntry(req.Content)
+        if req.Type == "" {
+            req.Type = "journal"
+        }
+        go processEntry(req.Content, req.Type)
 
         w.WriteHeader(http.StatusOK)
         if err := json.NewEncoder(w).Encode(map[string]string{"status": "created"}); err != nil {
@@ -204,38 +272,43 @@ func main() {
 
 
 
-func processEntry(content string) {
-    log.Printf("Processing entry: %s\n", content)
+func processEntry(content string, entryType string) {
+	log.Printf("Processing %s entry: %s\n", entryType, content)
 
-    if geminiToken == "" {
-        log.Println("Skipping AI processing: GEMINI_API_TOKEN not set")
-        return
-    }
+	config, ok := EntryTypes[entryType]
+	if !ok {
+		log.Printf("Unknown entry type: %s, falling back to journal\n", entryType)
+		config = EntryTypes["journal"]
+		entryType = "journal"
+	}
 
-    jsonResponse, err := callGemini(content)
-    if err != nil {
-        log.Printf("Error calling Gemini: %v\n", err)
-        return
-    }
+	if geminiToken == "" {
+		log.Println("Skipping AI processing: GEMINI_API_TOKEN not set")
+		return
+	}
 
-    log.Printf("Gemini Summary:\n%s\n", jsonResponse)
+	prompt := fmt.Sprintf(config.Prompt, content)
+	jsonResponse, err := callGemini(prompt)
+	if err != nil {
+		log.Printf("Error calling Gemini: %v\n", err)
+		return
+	}
 
-    // Parse the JSON response
-    var analysis JournalAnalysis
-    // Gemini might wrap the JSON in markdown code blocks (```json ... ```), so we might need to clean it.
-    // For simplicity, let's assume it returns clean JSON or we strip the markdown if present.
-    // A simple way to strip markdown code blocks:
-    cleanJSON := stripMarkdown(jsonResponse)
+	log.Printf("Gemini Summary:\n%s\n", jsonResponse)
 
-    if err := json.Unmarshal([]byte(cleanJSON), &analysis); err != nil {
-        log.Printf("Error unmarshaling Gemini response: %v\nRaw response: %s", err, jsonResponse)
-        return
-    }
+	// Parse the JSON response
+	var analysis map[string]interface{}
+	cleanJSON := stripMarkdown(jsonResponse)
 
-	analysis.RawInput = content
+	if err := json.Unmarshal([]byte(cleanJSON), &analysis); err != nil {
+		log.Printf("Error unmarshaling Gemini response: %v\nRaw response: %s", err, jsonResponse)
+		return
+	}
 
-    // Save the entry (merging if necessary)
-    SaveEntry(analysis)
+	analysis["RawInput"] = content
+
+	// Save the entry (merging if necessary)
+	SaveEntry(entryType, analysis)
 }
 
 
@@ -257,29 +330,19 @@ func stripMarkdown(s string) string {
 
 
 
-func callGemini(journalEntry string) (string, error) {
-    url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + geminiToken
+func callGemini(prompt string) (string, error) {
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + geminiToken
 
-    prompt := fmt.Sprintf(`Analyze the following journal entry and provide a structured response in JSON format.
-The JSON should have the following fields:
-- "emotional_checkin": A general assessment of the emotional state.
-- "happy_things": A list of things that made the author happy.
-- "stressful_things": A list of things that were stressful.
-- "focus_items": A list of things the author wants to focus on for next time.
-
-Journal Entry:
-"%s"
-`, journalEntry)
-
-    reqBody := GeminiRequest{
-        Contents: []GeminiContent{
-            {
-                Parts: []GeminiPart{
-                    {Text: prompt},
-                },
-            },
-        },
-    }
+	reqBody := GeminiRequest{
+		Contents: []GeminiContent{
+			{
+				Parts: []GeminiPart{
+					{Text: prompt},
+				},
+			},
+		},
+	}
+// ...
 
     jsonData, err := json.Marshal(reqBody)
     if err != nil {

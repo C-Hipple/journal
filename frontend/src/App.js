@@ -10,6 +10,9 @@ function App() {
   const [view, setView] = useState('new');
   const [pastEntries, setPastEntries] = useState([]);
   const [isLoadingEntries, setIsLoadingEntries] = useState(false);
+  const [entryTypes, setEntryTypes] = useState([{ id: 'journal', name: 'Journal' }]);
+  const [selectedType, setSelectedType] = useState('journal');
+  const [viewType, setViewType] = useState('journal');
 
   useEffect(() => {
     checkAuth();
@@ -28,6 +31,24 @@ function App() {
       setIsLoggedIn(false);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      fetchTypes();
+    }
+  }, [isLoggedIn]);
+
+  const fetchTypes = async () => {
+    try {
+      const res = await fetch('/api/types');
+      if (res.ok) {
+        const data = await res.json();
+        setEntryTypes(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch types", err);
     }
   };
 
@@ -66,7 +87,7 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content: entryContent }),
+        body: JSON.stringify({ content: entryContent, type: selectedType }),
       });
 
       if (res.ok) {
@@ -125,7 +146,7 @@ function App() {
     const fetchEntries = async () => {
       setIsLoadingEntries(true);
       try {
-        const res = await fetch('/api/entries');
+        const res = await fetch(`/api/entries?type=${viewType}`);
         if (res.ok) {
           const data = await res.json();
           const rawContent = data.content || '';
@@ -142,7 +163,7 @@ function App() {
     if (isLoggedIn && view === 'past') {
       fetchEntries();
     }
-  }, [isLoggedIn, view]);
+  }, [isLoggedIn, view, viewType]);
 
   if (isLoading) {
     return <div className="App loading">Loading...</div>;
@@ -198,6 +219,18 @@ function App() {
 
         {view === 'new' ? (
           <form onSubmit={handleEntrySubmit} className="entry-form">
+            <div className="type-selector">
+              <label>Entry Type: </label>
+              <select
+                value={selectedType}
+                onChange={(e) => setSelectedType(e.target.value)}
+                className="type-select"
+              >
+                {entryTypes.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
             <textarea
               value={entryContent}
               onChange={(e) => setEntryContent(e.target.value)}
@@ -214,6 +247,18 @@ function App() {
           </form>
         ) : (
           <div className="entries-container">
+            <div className="view-type-selector">
+              <label>View Type: </label>
+              <select
+                value={viewType}
+                onChange={(e) => setViewType(e.target.value)}
+                className="type-select"
+              >
+                {entryTypes.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
             {isLoadingEntries ? (
               <p>Loading entries...</p>
             ) : pastEntries.length === 0 ? (

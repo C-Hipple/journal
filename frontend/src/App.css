@@ -121,6 +121,39 @@
   margin: 0;
 }
 
+.type-selector,
+.view-type-selector {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+}
+
+.type-select {
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--bg2);
+  background-color: var(--bg0);
+  color: var(--fg1);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.type-select:focus {
+  outline: 2px solid var(--aqua-bright);
+}
+
+.view-type-selector {
+  justify-content: center;
+  background-color: var(--bg1);
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--bg2);
+  margin-top: -1rem;
+  margin-bottom: 2rem;
+}
+
 .App-header {
   display: flex;
   flex-direction: column;

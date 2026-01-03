@@ -15,11 +15,54 @@ import (
 )
 
 var (
-	gitUsername string
-	gitRepoName string
-	githubToken string
-	repoDir     = "journal_storage"
+	gitUsername   string
+	gitRepoName   string
+	githubToken   string
+	repoDir       = "journal_storage"
+	journalFormat string // "org" or "markdown", default is "markdown"
 )
+
+func getJournalFileName(base string) string {
+	if journalFormat == "org" {
+		return base + ".org"
+	}
+	return base + ".md"
+}
+
+func getDateHeaderFormat() string {
+	if journalFormat == "org" {
+		return "* 2006-01-02 Mon"
+	}
+	return "## 2006-01-02 Mon"
+}
+
+func getTopLevelHeaderPattern() string {
+	if journalFormat == "org" {
+		return "\n* "
+	}
+	return "\n## "
+}
+
+func getSectionHeaderPattern() string {
+	if journalFormat == "org" {
+		return "\n** "
+	}
+	return "\n### "
+}
+
+func getMainHeaderPrefix() string {
+	if journalFormat == "org" {
+		return "* "
+	}
+	return "## "
+}
+
+func getSubHeaderPrefix() string {
+	if journalFormat == "org" {
+		return "** "
+	}
+	return "### "
+}
 
 func initGitRepo() {
 	log.Println("Initializing Git repo...")
@@ -69,11 +112,12 @@ func initGitRepo() {
 
 	// Check for all journal files
 	for _, config := range EntryTypes {
-		journalPath := filepath.Join(repoDir, config.TargetFile)
+		fileName := getJournalFileName(config.TargetFile)
+		journalPath := filepath.Join(repoDir, fileName)
 		if _, err := os.Stat(journalPath); os.IsNotExist(err) {
-			log.Printf("Creating %s...\n", config.TargetFile)
+			log.Printf("Creating %s...\n", fileName)
 			if err := os.WriteFile(journalPath, []byte(""), 0644); err != nil {
-				log.Printf("Error creating %s: %v", config.TargetFile, err)
+				log.Printf("Error creating %s: %v", fileName, err)
 			}
 		}
 	}
@@ -131,7 +175,7 @@ func syncGit() {
 	log.Println("Git sync successful.")
 }
 
-func formatOrgEntry(entryType string, analysis map[string]interface{}) string {
+func formatEntry(entryType string, analysis map[string]interface{}) string {
 	var sb bytes.Buffer
 
 	config, ok := EntryTypes[entryType]
@@ -139,12 +183,18 @@ func formatOrgEntry(entryType string, analysis map[string]interface{}) string {
 		config = EntryTypes["journal"]
 	}
 
+	headerPrefix := getSubHeaderPrefix()
+	isMarkdown := journalFormat == "markdown"
+
 	for _, field := range config.Fields {
 		header, ok := HeaderMapping[field]
 		if !ok {
 			header = field
 		}
-		sb.WriteString(fmt.Sprintf("** %s\n", header))
+		sb.WriteString(fmt.Sprintf("%s%s\n", headerPrefix, header))
+		if isMarkdown {
+			sb.WriteString("\n")
+		}
 
 		if val, ok := analysis[field]; ok {
 			switch v := val.(type) {
@@ -160,11 +210,20 @@ func formatOrgEntry(entryType string, analysis map[string]interface{}) string {
 				}
 			}
 		}
+		if isMarkdown {
+			sb.WriteString("\n")
+		}
 	}
 
 	if raw, ok := analysis["RawInput"].(string); ok {
-		sb.WriteString("** Raw Input\n")
+		sb.WriteString(fmt.Sprintf("%sRaw Input\n", headerPrefix))
+		if isMarkdown {
+			sb.WriteString("\n")
+		}
 		sb.WriteString(raw + "\n")
+		if isMarkdown {
+			sb.WriteString("\n")
+		}
 	}
 
 	sb.WriteString("\n")
@@ -177,10 +236,10 @@ func SaveEntry(entryType string, analysis map[string]interface{}) {
 		config = EntryTypes["journal"]
 	}
 
-	// Determine file path
-	targetFile := config.TargetFile
+	fileName := getJournalFileName(config.TargetFile)
+	targetFile := fileName
 	if gitUsername != "" && gitRepoName != "" {
-		targetFile = filepath.Join(repoDir, config.TargetFile)
+		targetFile = filepath.Join(repoDir, fileName)
 	}
 
 	// Read existing file
@@ -191,7 +250,7 @@ func SaveEntry(entryType string, analysis map[string]interface{}) {
 	}
 	existingContent := string(existingBytes)
 
-	dateHeader := time.Now().Format("* 2006-01-02 Mon")
+	dateHeader := time.Now().Format(getDateHeaderFormat())
 	var newFileContent string
 
 	if strings.Contains(existingContent, dateHeader) {
@@ -199,7 +258,7 @@ func SaveEntry(entryType string, analysis map[string]interface{}) {
 		newFileContent = mergeEntry(entryType, existingContent, dateHeader, analysis)
 	} else {
 		// Create new entry
-		entryContent := formatOrgEntry(entryType, analysis)
+		entryContent := formatEntry(entryType, analysis)
 		prefix := ""
 		if len(existingContent) > 0 && !strings.HasSuffix(existingContent, "\n") {
 			prefix = "\n"
@@ -225,7 +284,8 @@ func mergeEntry(entryType string, content string, dateHeader string, analysis ma
 
 	rest := content[idx:]
 	// Find end of this entry (start of next date)
-	nextEntryRelIdx := strings.Index(rest[len(dateHeader):], "\n* ")
+	topLevelPattern := getTopLevelHeaderPattern()
+	nextEntryRelIdx := strings.Index(rest[len(dateHeader):], topLevelPattern)
 
 	var entryBlock, after string
 	if nextEntryRelIdx == -1 {
@@ -242,12 +302,14 @@ func mergeEntry(entryType string, content string, dateHeader string, analysis ma
 		config = EntryTypes["journal"]
 	}
 
+	headerPrefix := getSubHeaderPrefix()
+
 	for _, field := range config.Fields {
 		header, ok := HeaderMapping[field]
 		if !ok {
 			header = field
 		}
-		sectionHeader := "** " + header
+		sectionHeader := headerPrefix + header
 
 		if val, ok := analysis[field]; ok {
 			switch v := val.(type) {
@@ -266,7 +328,7 @@ func mergeEntry(entryType string, content string, dateHeader string, analysis ma
 	}
 
 	if raw, ok := analysis["RawInput"].(string); ok {
-		entryBlock = appendToSection(entryBlock, "** Raw Input", raw)
+		entryBlock = appendToSection(entryBlock, headerPrefix+"Raw Input", raw)
 	}
 
 	return before + entryBlock + after
@@ -279,20 +341,21 @@ func appendToSection(entryBlock string, sectionHeader string, newItem string) st
 		if !strings.HasSuffix(entryBlock, "\n") {
 			entryBlock += "\n"
 		}
-		return entryBlock + sectionHeader + "\n" + newItem + "\n"
+		separator := "\n"
+		if journalFormat == "markdown" {
+			separator = "\n\n"
+		}
+		return entryBlock + sectionHeader + separator + newItem + "\n"
 	}
 
 	// Section exists
 	// Find end of section (start of next section or end of block)
-	// We look for "\n** " after the header
+	sectionPattern := getSectionHeaderPattern()
 	rest := entryBlock[idx+len(sectionHeader):]
-	nextSectionIdx := strings.Index(rest, "\n** ")
+	nextSectionIdx := strings.Index(rest, sectionPattern)
 
 	if nextSectionIdx == -1 {
 		// No next section, append to end
-		// Ensure there's a newline before appending if needed, though usually there is one.
-		// We want to append at the very end.
-		// If the block ends with newline, just append.
 		suffix := ""
 		if !strings.HasSuffix(entryBlock, "\n") {
 			suffix = "\n"
@@ -311,10 +374,10 @@ func GetEntries(entryType string) (string, error) {
 		config = EntryTypes["journal"]
 	}
 
-	// Determine file path
-	targetFile := config.TargetFile
+	fileName := getJournalFileName(config.TargetFile)
+	targetFile := fileName
 	if gitUsername != "" && gitRepoName != "" {
-		targetFile = filepath.Join(repoDir, config.TargetFile)
+		targetFile = filepath.Join(repoDir, fileName)
 	}
 
 	// Read existing file

@@ -83,7 +83,7 @@ The JSON should have the following fields:
 Journal Entry:
 "%s"
 `,
-		TargetFile: "journal.org",
+		TargetFile: "journal",
 		Fields:     []string{"emotional_checkin", "happy_things", "stressful_things", "focus_items"},
 	},
 	"notes": {
@@ -96,7 +96,7 @@ The JSON should have the following fields:
 Thought:
 "%s"
 `,
-		TargetFile: "notes.org",
+		TargetFile: "notes",
 		Fields:     []string{"summary", "notes"},
 	},
 }
@@ -125,6 +125,17 @@ func main() {
     if geminiToken == "" {
         log.Println("Warning: GEMINI_API_TOKEN environment variable not set. AI summarization will fail.")
     }
+
+    // Get Journal Format (default to markdown)
+    journalFormat = os.Getenv("JOURNAL_FORMAT")
+    if journalFormat == "" {
+        journalFormat = "markdown"
+    }
+    if journalFormat != "org" && journalFormat != "markdown" {
+        log.Printf("Warning: JOURNAL_FORMAT must be 'org' or 'markdown', defaulting to 'markdown'")
+        journalFormat = "markdown"
+    }
+    log.Printf("JOURNAL_FORMAT: %s", journalFormat)
 
     // Get Git Config
     gitUsername = os.Getenv("GIT_USERNAME")

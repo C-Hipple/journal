@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -20,6 +21,11 @@ var (
 	githubToken   string
 	repoDir       = "journal_storage"
 	journalFormat string // "org" or "markdown", default is "markdown"
+
+	// storageMutex serializes all read-modify-write cycles on the journal
+	// files (and the git operations that follow them) so concurrent entries
+	// can't clobber each other.
+	storageMutex sync.RWMutex
 )
 
 func getJournalFileName(base string) string {
@@ -187,6 +193,11 @@ func formatEntry(entryType string, analysis map[string]interface{}) string {
 	isMarkdown := journalFormat == "markdown"
 
 	for _, field := range config.Fields {
+		val, ok := analysis[field]
+		if !ok {
+			continue
+		}
+
 		header, ok := HeaderMapping[field]
 		if !ok {
 			header = field
@@ -196,18 +207,16 @@ func formatEntry(entryType string, analysis map[string]interface{}) string {
 			sb.WriteString("\n")
 		}
 
-		if val, ok := analysis[field]; ok {
-			switch v := val.(type) {
-			case string:
-				sb.WriteString(v + "\n")
-			case []interface{}:
-				for _, item := range v {
-					sb.WriteString(fmt.Sprintf("- %v\n", item))
-				}
-			case []string:
-				for _, item := range v {
-					sb.WriteString(fmt.Sprintf("- %s\n", item))
-				}
+		switch v := val.(type) {
+		case string:
+			sb.WriteString(v + "\n")
+		case []interface{}:
+			for _, item := range v {
+				sb.WriteString(fmt.Sprintf("- %v\n", item))
+			}
+		case []string:
+			for _, item := range v {
+				sb.WriteString(fmt.Sprintf("- %s\n", item))
 			}
 		}
 		if isMarkdown {
@@ -230,7 +239,16 @@ func formatEntry(entryType string, analysis map[string]interface{}) string {
 	return sb.String()
 }
 
-func SaveEntry(entryType string, analysis map[string]interface{}) {
+// SaveRawEntry persists just the raw input under the given date header so the
+// text is durable before (and regardless of) AI processing.
+func SaveRawEntry(entryType string, content string, dateHeader string) error {
+	return SaveEntry(entryType, map[string]interface{}{"RawInput": content}, dateHeader)
+}
+
+func SaveEntry(entryType string, analysis map[string]interface{}, dateHeader string) error {
+	storageMutex.Lock()
+	defer storageMutex.Unlock()
+
 	config, ok := EntryTypes[entryType]
 	if !ok {
 		config = EntryTypes["journal"]
@@ -246,11 +264,13 @@ func SaveEntry(entryType string, analysis map[string]interface{}) {
 	existingBytes, err := os.ReadFile(targetFile)
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("Error reading %s: %v", targetFile, err)
-		return
+		return err
 	}
 	existingContent := string(existingBytes)
 
-	dateHeader := time.Now().Format(getDateHeaderFormat())
+	if dateHeader == "" {
+		dateHeader = time.Now().Format(getDateHeaderFormat())
+	}
 	var newFileContent string
 
 	if strings.Contains(existingContent, dateHeader) {
@@ -266,16 +286,23 @@ func SaveEntry(entryType string, analysis map[string]interface{}) {
 		newFileContent = existingContent + prefix + dateHeader + "\n" + entryContent
 	}
 
-	// Write back to file
-	if err := os.WriteFile(targetFile, []byte(newFileContent), 0644); err != nil {
-		log.Printf("Error writing to %s: %v", targetFile, err)
-		return
+	// Write to a temp file and rename so a crash mid-write can't truncate
+	// the journal.
+	tmpFile := targetFile + ".tmp"
+	if err := os.WriteFile(tmpFile, []byte(newFileContent), 0644); err != nil {
+		log.Printf("Error writing to %s: %v", tmpFile, err)
+		return err
+	}
+	if err := os.Rename(tmpFile, targetFile); err != nil {
+		log.Printf("Error replacing %s: %v", targetFile, err)
+		return err
 	}
 
 	// Sync with Git if enabled
 	if gitUsername != "" && gitRepoName != "" && githubToken != "" {
 		syncGit()
 	}
+	return nil
 }
 
 func mergeEntry(entryType string, content string, dateHeader string, analysis map[string]interface{}) string {
@@ -337,15 +364,30 @@ func mergeEntry(entryType string, content string, dateHeader string, analysis ma
 func appendToSection(entryBlock string, sectionHeader string, newItem string) string {
 	idx := strings.Index(entryBlock, sectionHeader)
 	if idx == -1 {
-		// Section missing, append to end of block
-		if !strings.HasSuffix(entryBlock, "\n") {
-			entryBlock += "\n"
-		}
+		// Section missing
 		separator := "\n"
 		if journalFormat == "markdown" {
 			separator = "\n\n"
 		}
-		return entryBlock + sectionHeader + separator + newItem + "\n"
+		section := sectionHeader + separator + newItem + "\n"
+
+		// Keep the Raw Input section last: analysis sections merged in after
+		// the raw input was saved are inserted above it.
+		rawHeader := getSubHeaderPrefix() + "Raw Input"
+		if sectionHeader != rawHeader {
+			if rawIdx := strings.Index(entryBlock, rawHeader); rawIdx != -1 {
+				if journalFormat == "markdown" {
+					section += "\n"
+				}
+				return entryBlock[:rawIdx] + section + entryBlock[rawIdx:]
+			}
+		}
+
+		// No Raw Input section, append to end of block
+		if !strings.HasSuffix(entryBlock, "\n") {
+			entryBlock += "\n"
+		}
+		return entryBlock + section
 	}
 
 	// Section exists
@@ -369,6 +411,9 @@ func appendToSection(entryBlock string, sectionHeader string, newItem string) st
 }
 
 func GetEntries(entryType string) (string, error) {
+	storageMutex.RLock()
+	defer storageMutex.RUnlock()
+
 	config, ok := EntryTypes[entryType]
 	if !ok {
 		config = EntryTypes["journal"]

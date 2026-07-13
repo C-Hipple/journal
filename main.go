@@ -10,6 +10,7 @@ import (
     "log"
     "net/http"
     "os"
+    "strings"
     "sync"
     "time"
 )
@@ -118,7 +119,6 @@ func main() {
     if expectedPassword == "" {
         log.Fatal("Error: JOURNAL_PASSWORD environment variable not set.")
     }
-    log.Printf("JOURNAL_PASSWORD: %s", expectedPassword)
 
     // Get Gemini Token
     geminiToken = os.Getenv("GEMINI_API_TOKEN")
@@ -262,11 +262,28 @@ func main() {
             return
         }
 
-        // Process the entry asynchronously
-        if req.Type == "" {
+        if strings.TrimSpace(req.Content) == "" {
+            http.Error(w, "Content cannot be empty", http.StatusBadRequest)
+            return
+        }
+
+        if _, ok := EntryTypes[req.Type]; !ok {
+            if req.Type != "" {
+                log.Printf("Unknown entry type: %s, falling back to journal\n", req.Type)
+            }
             req.Type = "journal"
         }
-        go processEntry(req.Content, req.Type)
+
+        // Persist the raw input synchronously so it cannot be lost if AI
+        // processing fails, and so it is visible in the log immediately.
+        dateHeader := time.Now().Format(getDateHeaderFormat())
+        if err := SaveRawEntry(req.Type, req.Content, dateHeader); err != nil {
+            http.Error(w, "Failed to save entry", http.StatusInternalServerError)
+            return
+        }
+
+        // Enrich the saved entry with AI analysis asynchronously
+        go processEntry(req.Content, req.Type, dateHeader)
 
         w.WriteHeader(http.StatusOK)
         if err := json.NewEncoder(w).Encode(map[string]string{"status": "created"}); err != nil {
@@ -283,7 +300,7 @@ func main() {
 
 
 
-func processEntry(content string, entryType string) {
+func processEntry(content string, entryType string, dateHeader string) {
 	log.Printf("Processing %s entry: %s\n", entryType, content)
 
 	config, ok := EntryTypes[entryType]
@@ -316,27 +333,23 @@ func processEntry(content string, entryType string) {
 		return
 	}
 
-	analysis["RawInput"] = content
-
-	// Save the entry (merging if necessary)
-	SaveEntry(entryType, analysis)
+	// The raw input was already saved when the entry was posted; merge only
+	// the analysis sections into that entry.
+	delete(analysis, "RawInput")
+	if err := SaveEntry(entryType, analysis, dateHeader); err != nil {
+		log.Printf("Error saving analysis for %s entry: %v", entryType, err)
+	}
 }
 
 
 
 func stripMarkdown(s string) string {
-    // Remove ```json at start and ``` at end if present
-    // This is a basic implementation
-    if len(s) > 7 && s[:7] == "```json" {
-        s = s[7:]
-    }
-    if len(s) > 3 && s[:3] == "```" {
-        s = s[3:]
-    }
-    if len(s) > 3 && s[len(s)-3:] == "```" {
-        s = s[:len(s)-3]
-    }
-    return s
+    // Remove a ```json / ``` fence around the response if present
+    s = strings.TrimSpace(s)
+    s = strings.TrimPrefix(s, "```json")
+    s = strings.TrimPrefix(s, "```")
+    s = strings.TrimSuffix(s, "```")
+    return strings.TrimSpace(s)
 }
 
 

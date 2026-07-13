@@ -283,7 +283,16 @@ function App() {
                       </div>
                     )}
                   </div>
-                  <div className="entry-content">{renderOrgContent(entry.content)}</div>
+                  <div className="entry-content">
+                    {entry.content ? (
+                      renderOrgContent(entry.content)
+                    ) : entry.rawInput ? (
+                      <div className="pending-entry">
+                        <p className="pending-note">Not processed yet — raw entry:</p>
+                        <p className="raw-text">{entry.rawInput}</p>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ))
             )}

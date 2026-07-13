@@ -330,6 +330,18 @@ p {
   line-height: 1.5;
 }
 
+/* Unprocessed entries (raw input saved, AI analysis pending) */
+.pending-note {
+  font-style: italic;
+  opacity: 0.7;
+  margin-bottom: 0.5rem;
+}
+
+.raw-text {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
 /* Tooltip */
 .tooltip-container {
   display: inline-block;

@@ -6,6 +6,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [githubTokenValid, setGithubTokenValid] = useState(true);
 
   useEffect(() => {
     checkAuth();
@@ -16,6 +17,10 @@ function App() {
       const res = await fetch('/api/check-auth');
       if (res.ok) {
         setIsLoggedIn(true);
+        const data = await res.json();
+        if (data.github_token_valid !== undefined) {
+          setGithubTokenValid(data.github_token_valid);
+        }
       } else {
         setIsLoggedIn(false);
       }
@@ -42,6 +47,10 @@ function App() {
       if (res.ok) {
         setIsLoggedIn(true);
         setPassword('');
+        const data = await res.json();
+        if (data.github_token_valid !== undefined) {
+          setGithubTokenValid(data.github_token_valid);
+        }
       } else {
         setError('Invalid password');
       }
@@ -103,6 +112,11 @@ function App() {
 
   return (
     <div className="App">
+      {!githubTokenValid && (
+        <div className="warning-banner">
+          Warning: GITHUB_TOKEN is missing or invalid. Entries will not be synced to Git.
+        </div>
+      )}
       <header className="App-header">
         <h1>Quick Journal</h1>
         <form onSubmit={handleEntrySubmit} className="entry-form">

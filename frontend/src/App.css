@@ -165,3 +165,13 @@ h1 {
 p {
   color: var(--fg2);
 }
+
+.warning-banner {
+  background-color: var(--red);
+  color: var(--fg0);
+  width: 100%;
+  padding: 1rem;
+  font-weight: bold;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}

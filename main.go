@@ -23,6 +23,8 @@ var (
     geminiToken      string
     gitUsername      string
     gitRepoName      string
+    githubToken      string
+    githubTokenValid bool
     repoDir          = "journal_storage"
 )
 
@@ -92,6 +94,14 @@ func main() {
     // Get Git Config
     gitUsername = os.Getenv("GIT_USERNAME")
     gitRepoName = os.Getenv("GIT_REPO_NAME")
+    githubToken = os.Getenv("GITHUB_TOKEN")
+    
+    if githubToken != "" {
+        githubTokenValid = validateGithubToken(githubToken)
+    } else {
+        log.Println("Warning: GITHUB_TOKEN not set. If using Fly.io, you may need it for HTTPS cloning.")
+    }
+
     if gitUsername != "" && gitRepoName != "" {
         initGitRepo()
     } else {
@@ -139,7 +149,10 @@ func main() {
         })
 
         w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(map[string]string{"status": "logged_in"})
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "status":             "logged_in",
+            "github_token_valid": githubTokenValid,
+        })
     })
 
     http.HandleFunc("/api/check-auth", func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +162,10 @@ func main() {
         }
 
         w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(map[string]string{"status": "authenticated"})
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "status":             "authenticated",
+            "github_token_valid": githubTokenValid,
+        })
     })
 
     http.HandleFunc("/api/entries", func(w http.ResponseWriter, r *http.Request) {
@@ -187,9 +203,18 @@ func initGitRepo() {
     log.Println("Initializing Git repo...")
     if _, err := os.Stat(repoDir); os.IsNotExist(err) {
         // Clone
-        // Using SSH format: git@github.com:User/Repo.git
-        repoURL := fmt.Sprintf("git@github.com:%s/%s.git", gitUsername, gitRepoName)
-        log.Printf("Cloning %s into %s...\n", repoURL, repoDir)
+        var repoURL, safeURL string
+        if githubToken != "" {
+            // Using HTTPS format with token
+            repoURL = fmt.Sprintf("https://%s:%s@github.com/%s/%s.git", gitUsername, githubToken, gitUsername, gitRepoName)
+            safeURL = fmt.Sprintf("https://github.com/%s/%s.git", gitUsername, gitRepoName)
+        } else {
+            // Using SSH format: git@github.com:User/Repo.git
+            repoURL = fmt.Sprintf("git@github.com:%s/%s.git", gitUsername, gitRepoName)
+            safeURL = repoURL
+        }
+        
+        log.Printf("Cloning %s into %s...\n", safeURL, repoDir)
         cmd := exec.Command("git", "clone", repoURL, repoDir)
         if out, err := cmd.CombinedOutput(); err != nil {
             log.Printf("Error cloning repo: %v\nOutput: %s", err, out)
@@ -298,6 +323,30 @@ func syncGit() {
     }
 
     log.Println("Git sync successful.")
+}
+
+func validateGithubToken(token string) bool {
+    req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+    if err != nil {
+        return false
+    }
+    req.Header.Set("Authorization", "Bearer "+token)
+    req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+    client := &http.Client{Timeout: 5 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        log.Printf("Error validating GitHub token: %v\n", err)
+        return false
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode == http.StatusOK {
+        log.Println("GitHub token validation successful.")
+        return true
+    }
+    log.Printf("GitHub token validation failed with status: %d\n", resp.StatusCode)
+    return false
 }
 
 func stripMarkdown(s string) string {

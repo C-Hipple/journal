@@ -1,5 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import './App.css';
+
+// Phone photos are far larger than a note needs to be, and every one of them is
+// committed to the notes repo, so captures are downscaled before upload.
+const MAX_PHOTO_EDGE = 1600;
+const PHOTO_QUALITY = 0.85;
+const TOPIC_STORAGE_KEY = 'journal.topic';
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -13,6 +19,12 @@ function App() {
   const [entryTypes, setEntryTypes] = useState([{ id: 'journal', name: 'Journal' }]);
   const [selectedType, setSelectedType] = useState('journal');
   const [viewType, setViewType] = useState('journal');
+  const [topic, setTopic] = useState(() => readStoredTopic());
+  const [knownTopics, setKnownTopics] = useState([]);
+  const [entryContent, setEntryContent] = useState('');
+  const [entryStatus, setEntryStatus] = useState('');
+  const [photoStatus, setPhotoStatus] = useState('');
+  const [lastPhoto, setLastPhoto] = useState(null);
 
   useEffect(() => {
     checkAuth();
@@ -52,6 +64,38 @@ function App() {
     }
   };
 
+  // Today's topics, so a talk can be resumed with a tap instead of retyping it.
+  const fetchTopics = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/topics?type=${encodeURIComponent(selectedType)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setKnownTopics(data.topics || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch topics", err);
+    }
+  }, [selectedType]);
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      fetchTopics();
+    }
+  }, [isLoggedIn, fetchTopics]);
+
+  // The topic outlives a page reload so a whole talk's notes land together.
+  useEffect(() => {
+    try {
+      if (topic) {
+        window.localStorage.setItem(TOPIC_STORAGE_KEY, topic);
+      } else {
+        window.localStorage.removeItem(TOPIC_STORAGE_KEY);
+      }
+    } catch (err) {
+      // Private browsing and blocked site data: the topic just won't persist.
+    }
+  }, [topic]);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
@@ -75,9 +119,6 @@ function App() {
     }
   };
 
-  const [entryContent, setEntryContent] = useState('');
-  const [entryStatus, setEntryStatus] = useState('');
-
   const handleEntrySubmit = async (e) => {
     e.preventDefault();
     setEntryStatus('Sending...');
@@ -87,12 +128,13 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content: entryContent, type: selectedType }),
+        body: JSON.stringify({ content: entryContent, type: selectedType, topic: topic.trim() }),
       });
 
       if (res.ok) {
-        setEntryStatus('Entry saved!');
+        setEntryStatus(topic.trim() ? `Added to "${topic.trim()}"` : 'Entry saved!');
         setEntryContent('');
+        fetchTopics();
         setTimeout(() => setEntryStatus(''), 3000);
       } else {
         setEntryStatus('Failed to save entry.');
@@ -103,48 +145,36 @@ function App() {
     }
   };
 
-  const renderOrgContent = (content) => {
-    const lines = content.split('\n');
-    const elements = [];
-    let currentListItems = [];
+  const handlePhotoCapture = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    // Reset the input so the same photo can be picked again if an upload fails.
+    e.target.value = '';
+    if (!file) {
+      return;
+    }
 
-    const flushList = (keyPrefix) => {
-      if (currentListItems.length > 0) {
-        elements.push(<ul key={`${keyPrefix}-list`}>{currentListItems}</ul>);
-        currentListItems = [];
-      }
-    };
+    setPhotoStatus('Uploading photo...');
+    try {
+      const body = new FormData();
+      body.append('photo', await downscaleImage(file), 'capture.jpg');
+      body.append('type', selectedType);
+      body.append('topic', topic.trim());
 
-    lines.forEach((line, index) => {
-      const trimmedLine = line.trim();
-      if (!trimmedLine) {
-        flushList(index);
+      const res = await fetch('/api/photos', { method: 'POST', body });
+      if (!res.ok) {
+        setPhotoStatus('Failed to save photo.');
         return;
       }
 
-      if (trimmedLine.startsWith('- ')) {
-        currentListItems.push(<li key={index}>{trimmedLine.substring(2)}</li>);
-      } else {
-        flushList(index);
-
-        // Support both org mode (*, **) and markdown (##, ###) headers
-        if (line.startsWith('* ') && !line.startsWith('** ')) {
-          elements.push(<h1 key={index}>{line.substring(2)}</h1>);
-        } else if (line.startsWith('** ')) {
-          elements.push(<h2 key={index}>{line.substring(3)}</h2>);
-        } else if (line.startsWith('## ')) {
-          elements.push(<h1 key={index}>{line.substring(3)}</h1>);
-        } else if (line.startsWith('### ')) {
-          elements.push(<h2 key={index}>{line.substring(4)}</h2>);
-        } else {
-          elements.push(<p key={index}>{line}</p>);
-        }
-      }
-    });
-
-    flushList('end');
-
-    return elements;
+      const data = await res.json();
+      setLastPhoto(data.url);
+      setPhotoStatus(topic.trim() ? `Photo added to "${topic.trim()}"` : 'Photo saved!');
+      fetchTopics();
+      setTimeout(() => setPhotoStatus(''), 4000);
+    } catch (err) {
+      console.error("Photo upload failed", err);
+      setPhotoStatus('Error saving photo.');
+    }
   };
 
   useEffect(() => {
@@ -225,8 +255,9 @@ function App() {
         {view === 'new' ? (
           <form onSubmit={handleEntrySubmit} className="entry-form">
             <div className="type-selector">
-              <label>Entry Type: </label>
+              <label htmlFor="entry-type">Entry Type: </label>
               <select
+                id="entry-type"
                 value={selectedType}
                 onChange={(e) => setSelectedType(e.target.value)}
                 className="type-select"
@@ -236,6 +267,52 @@ function App() {
                 ))}
               </select>
             </div>
+
+            <div className="topic-picker">
+              <label htmlFor="entry-topic">Topic (e.g. the talk you're in)</label>
+              <div className="topic-input-row">
+                <input
+                  id="entry-topic"
+                  type="text"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  placeholder="No topic — filed under today"
+                  className="topic-input"
+                  list="known-topics"
+                  autoComplete="off"
+                />
+                {topic && (
+                  <button type="button" className="topic-clear" onClick={() => setTopic('')}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              <datalist id="known-topics">
+                {knownTopics.map(name => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              {knownTopics.length > 0 && (
+                <div className="topic-chips">
+                  {knownTopics.map(name => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={`topic-chip ${topic === name ? 'active' : ''}`}
+                      onClick={() => setTopic(name)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="topic-hint">
+                {topic.trim()
+                  ? 'Notes and photos join this topic, and the summary is rewritten from all of them.'
+                  : 'Set a topic to group a talk’s notes together and have them summarised as one.'}
+              </p>
+            </div>
+
             <textarea
               value={entryContent}
               onChange={(e) => setEntryContent(e.target.value)}
@@ -247,14 +324,31 @@ function App() {
               <button type="submit" className="submit-button" disabled={!entryContent.trim()}>
                 Save Entry
               </button>
+              <label className="photo-button">
+                📷 Add Photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoCapture}
+                  className="photo-input"
+                />
+              </label>
               {entryStatus && <span className="status-message">{entryStatus}</span>}
+              {photoStatus && <span className="status-message">{photoStatus}</span>}
             </div>
+            {lastPhoto && (
+              <div className="photo-preview">
+                <img src={lastPhoto} alt="Most recent attachment" />
+              </div>
+            )}
           </form>
         ) : (
           <div className="entries-container">
             <div className="view-type-selector">
-              <label>View Type: </label>
+              <label htmlFor="view-type">View Type: </label>
               <select
+                id="view-type"
                 value={viewType}
                 onChange={(e) => setViewType(e.target.value)}
                 className="type-select"
@@ -273,26 +367,18 @@ function App() {
                 <div key={index} className="entry-card">
                   <div className="entry-header">
                     {entry.date}
-                    {entry.rawInput && (
-                      <div className="tooltip-container">
-                        <span className="info-icon">🔍</span>
-                        <div className="tooltip-content">
-                          <strong>Raw Input:</strong>
-                          <pre>{entry.rawInput}</pre>
-                        </div>
-                      </div>
-                    )}
+                    <RawInputTooltip rawInput={entry.rawInput} />
                   </div>
-                  <div className="entry-content">
-                    {entry.content ? (
-                      renderOrgContent(entry.content)
-                    ) : entry.rawInput ? (
-                      <div className="pending-entry">
-                        <p className="pending-note">Not processed yet — raw entry:</p>
-                        <p className="raw-text">{entry.rawInput}</p>
+                  <EntryBody section={entry} />
+                  {entry.groups.map((group) => (
+                    <div key={group.topic} className="topic-block">
+                      <div className="topic-block-header">
+                        {group.topic}
+                        <RawInputTooltip rawInput={group.rawInput} />
                       </div>
-                    ) : null}
-                  </div>
+                      <EntryBody section={group} />
+                    </div>
+                  ))}
                 </div>
               ))
             )}
@@ -305,36 +391,257 @@ function App() {
 
 export default App;
 
-const parseEntries = (content) => {
-  const lines = content.split('\n');
-  const entries = [];
-  let currentEntry = null;
+function RawInputTooltip({ rawInput }) {
+  if (!rawInput) {
+    return null;
+  }
+  return (
+    <div className="tooltip-container">
+      <span className="info-icon">🔍</span>
+      <div className="tooltip-content">
+        <strong>Raw Input:</strong>
+        <pre>{rawInput}</pre>
+      </div>
+    </div>
+  );
+}
 
-  const processEntry = (entry) => {
-    // Support both org mode (** Raw Input) and markdown (### Raw Input) formats
-    const rawInputMatch = entry.content.match(/(?:\*\*|###) Raw Input\n+([\s\S]*)/);
-    if (rawInputMatch) {
-      entry.rawInput = rawInputMatch[1].trim();
-      entry.content = entry.content.replace(rawInputMatch[0], '').trim();
+function EntryBody({ section }) {
+  const hasContent = Boolean(section.content);
+  return (
+    <div className="entry-content">
+      {hasContent ? renderContent(section.content) : null}
+      {!hasContent && section.rawInput ? (
+        <div className="pending-entry">
+          <p className="pending-note">Not processed yet — raw notes:</p>
+          <p className="raw-text">{section.rawInput}</p>
+        </div>
+      ) : null}
+      {section.photos.length > 0 && (
+        <div className="photo-grid">
+          {section.photos.map((photo) => (
+            <a key={photo.src} href={`/api/media/${photo.src}`} target="_blank" rel="noreferrer">
+              <img src={`/api/media/${photo.src}`} alt={photo.caption || 'Attachment'} />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// createImageBitmap applies the EXIF orientation a phone camera records; the
+// <img> path is the fallback for browsers that don't take the option.
+const loadImage = (file) => {
+  if (typeof createImageBitmap === 'function') {
+    return createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => loadImageElement(file));
+  }
+  return loadImageElement(file);
+};
+
+const loadImageElement = (file) =>
+  new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read that image'));
+    };
+    img.src = url;
+  });
+
+const downscaleImage = async (file) => {
+  try {
+    const source = await loadImage(file);
+    const width = source.naturalWidth || source.width;
+    const height = source.naturalHeight || source.height;
+    const scale = Math.min(1, MAX_PHOTO_EDGE / Math.max(width, height));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+    if (typeof source.close === 'function') {
+      source.close();
     }
-    return entry;
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', PHOTO_QUALITY));
+    return blob || file;
+  } catch (err) {
+    // Better to upload the original than to lose the photo.
+    console.error("Could not downscale photo, uploading as captured", err);
+    return file;
+  }
+};
+
+const readStoredTopic = () => {
+  try {
+    return window.localStorage.getItem(TOPIC_STORAGE_KEY) || '';
+  } catch (err) {
+    return '';
+  }
+};
+
+// headerLevel normalises Markdown and Org headings onto one depth scale, so
+// "## "/"* " is a day, "### "/"** " a section or topic, and "#### "/"*** " a
+// section inside a topic.
+const headerLevel = (line) => {
+  const markdown = line.match(/^(#{1,6}) /);
+  if (markdown) {
+    return markdown[1].length;
+  }
+  const org = line.match(/^(\*{1,6}) /);
+  if (org) {
+    return org[1].length + 1;
+  }
+  return 0;
+};
+
+const headerText = (line) => line.slice(line.indexOf(' ') + 1);
+
+const renderContent = (content) => {
+  const lines = content.split('\n');
+  const elements = [];
+  let currentListItems = [];
+
+  const flushList = (keyPrefix) => {
+    if (currentListItems.length > 0) {
+      elements.push(<ul key={`${keyPrefix}-list`}>{currentListItems}</ul>);
+      currentListItems = [];
+    }
   };
 
-  lines.forEach(line => {
-    // Support both org mode (* 20) and markdown (## 20) date headers
-    if (line.startsWith('* 20') || line.startsWith('## 20')) {
+  lines.forEach((line, index) => {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      flushList(index);
+      return;
+    }
+
+    if (trimmedLine.startsWith('- ')) {
+      currentListItems.push(<li key={index}>{trimmedLine.substring(2)}</li>);
+      return;
+    }
+
+    flushList(index);
+
+    const level = headerLevel(line);
+    if (level === 0) {
+      elements.push(<p key={index}>{line}</p>);
+    } else if (level <= 2) {
+      elements.push(<h1 key={index}>{headerText(line)}</h1>);
+    } else if (level === 3) {
+      elements.push(<h2 key={index}>{headerText(line)}</h2>);
+    } else {
+      elements.push(<h3 key={index}>{headerText(line)}</h3>);
+    }
+  });
+
+  flushList('end');
+
+  return elements;
+};
+
+const isDateHeader = (line) => line.startsWith('* 20') || line.startsWith('## 20');
+
+const TOPIC_HEADER_PATTERN = /^(?:###|\*\*) Topic: (.+)$/;
+
+// takeSection lifts a named section out of a block, returning the rest of the
+// block and the section's body.
+const takeSection = (block, name, depth) => {
+  const prefixes = ['#'.repeat(depth) + ' ', '*'.repeat(depth - 1) + ' '];
+  const lines = block.split('\n');
+  const start = lines.findIndex((line) => prefixes.some((prefix) => line === prefix + name));
+  if (start === -1) {
+    return { block, body: '' };
+  }
+
+  let end = start + 1;
+  while (end < lines.length && headerLevel(lines[end]) === 0) {
+    end += 1;
+  }
+
+  return {
+    block: lines.slice(0, start).concat(lines.slice(end)).join('\n'),
+    body: lines.slice(start + 1, end).join('\n').trim(),
+  };
+};
+
+const parsePhotos = (body) =>
+  body
+    .split('\n')
+    .map((line) => {
+      const markdown = line.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+      if (markdown) {
+        return { caption: markdown[1], src: markdown[2] };
+      }
+      const org = line.match(/\[\[file:([^\]]+)\]\[([^\]]*)\]\]/);
+      if (org) {
+        return { caption: org[2], src: org[1] };
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+// splitBody pulls the photos and the raw notes out of a block so they can be
+// rendered separately from the AI analysis.
+const splitBody = (block, depth) => {
+  const withoutPhotos = takeSection(block, 'Photos', depth);
+  const withoutRaw = takeSection(withoutPhotos.block, 'Raw Input', depth);
+  return {
+    content: withoutRaw.block.trim(),
+    rawInput: withoutRaw.body,
+    photos: parsePhotos(withoutPhotos.body),
+  };
+};
+
+export const parseEntries = (content) => {
+  const entries = [];
+  let currentEntry = null;
+  let currentGroup = null;
+
+  const finishEntry = (entry) => ({
+    date: entry.date,
+    ...splitBody(entry.content, 3),
+    groups: entry.groups.map((group) => ({ topic: group.topic, ...splitBody(group.content, 4) })),
+  });
+
+  content.split('\n').forEach((line) => {
+    if (isDateHeader(line)) {
       if (currentEntry) {
-        entries.push(processEntry(currentEntry));
+        entries.push(finishEntry(currentEntry));
       }
       // Remove the leading * or ## from the date
       const date = line.startsWith('* ') ? line.substring(2) : line.substring(3);
-      currentEntry = { date: date, content: '' };
-    } else if (currentEntry) {
+      currentEntry = { date, content: '', groups: [] };
+      currentGroup = null;
+      return;
+    }
+
+    if (!currentEntry) {
+      return;
+    }
+
+    const topicMatch = line.match(TOPIC_HEADER_PATTERN);
+    if (topicMatch) {
+      currentGroup = { topic: topicMatch[1].trim(), content: '' };
+      currentEntry.groups.push(currentGroup);
+      return;
+    }
+
+    if (currentGroup) {
+      currentGroup.content += line + '\n';
+    } else {
       currentEntry.content += line + '\n';
     }
   });
+
   if (currentEntry) {
-    entries.push(processEntry(currentEntry));
+    entries.push(finishEntry(currentEntry));
   }
   return entries.reverse();
 };

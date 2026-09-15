@@ -9,6 +9,8 @@ A web-based journaling application that uses Google's Gemini AI to parse unstruc
     -   Things that made you happy
     -   Things that were stressful
     -   Focus items for next time
+-   **Topics**: Group a day's entries under a topic (a conference talk, a meeting) so many short notes collect in one place. The AI summary is then re-synthesized from *all* of that topic's notes, instead of each note being summarized on its own.
+-   **Photos**: Attach a picture straight from the phone camera. It is saved into the storage repo and linked from the entry (or from the topic, when one is set).
 -   **Git Storage**: Automatically commits and pushes entries to a specified GitHub repository in Markdown or Org-mode format.
 -   **Secure Access**: Simple password-based authentication with session management.
 -   **Beautiful UI**: A responsive React frontend styled with the Gruvbox Dark theme.
@@ -36,6 +38,7 @@ The application is configured via environment variables. You must set these befo
 1.  Create a private repository on GitHub (e.g., `journal-entries`).
 2.  Ensure your local machine has SSH keys configured for your GitHub account.
 3.  The application will automatically clone this repo into a `journal_storage` directory on first run.
+4.  Photo attachments are written to `images/<date>/` inside that repo and pushed along with the notes, so keep an eye on its size if you attach a lot of them.
 
 ## Running the Application
 
@@ -80,6 +83,24 @@ The application will be available at http://localhost:8080.
     -   Append it to `journal.md` (or `journal.org` if using Org-mode) in your Git repo.
     -   Commit and push the changes to GitHub.
 
+### Topics
+
+Set a **Topic** on the New Entry screen to group everything that follows under one heading for the day — a conference talk, a meeting, a chapter of a book. Topics already used today appear as chips, so a talk can be resumed with a tap, and the current topic survives a page reload. Leave the topic empty and entries are filed directly under the day, exactly as before.
+
+What a topic changes:
+
+-   Every note (and photo) posted with that topic lands in the same topic block, rather than being appended as another entry for the day.
+-   When a new note arrives, the AI is given **all** of that topic's notes so far and asked to synthesize them as one session. The resulting summary **replaces** the topic's previous one — it doesn't stack up. A long talk therefore ends with a single coherent summary rather than a dozen fragments.
+-   The raw notes and photos are never rewritten; only the analysis sections are.
+
+Topics are just headings in the file, so notes taken under a topic stay readable and greppable in plain Markdown or Org.
+
+### Photos
+
+Tap **📷 Add Photo** to open the phone camera (or the file picker on a desktop). The capture is downscaled in the browser to at most 1600px on its longest edge, then uploaded, written to `images/<date>/` inside the storage repo, committed, and linked from the current entry — under the current topic if one is set.
+
+Photos are served back to the UI through `/api/media/...`, which requires a logged-in session and only serves files under `images/`.
+
 ## Output Format
 
 Entries are saved in `journal.md` (default) or `journal.org` (if `JOURNAL_FORMAT=org` is set). The format can be controlled via the `JOURNAL_FORMAT` environment variable.
@@ -111,6 +132,32 @@ Feeling productive but slightly tired.
 Today I worked on a new feature...
 ```
 
+With a topic set, the day's entry nests one level deeper:
+
+```markdown
+## 2025-01-15 Mon
+
+### Topic: Scaling Postgres to 100TB
+
+#### Summary
+
+A walkthrough of moving from a single primary to tenant-based sharding.
+
+#### Notes
+
+- Shard key is tenant id
+- WAL shipping is async by default
+
+#### Photos
+
+![Scaling Postgres to 100TB 09:12](images/2025-01-15/091200-scaling-postgres.jpg)
+
+#### Raw Input
+
+they shard by tenant id
+wal shipping is async by default
+```
+
 ### Org-mode Format
 
 Set `JOURNAL_FORMAT=org` to use Org-mode format:
@@ -128,6 +175,21 @@ Feeling productive but slightly tired.
 - Take more breaks
 ** Raw Input
 Today I worked on a new feature...
+```
+
+Topics nest the same way in Org-mode, and photos become file links:
+
+```org
+* 2025-01-15 Mon
+** Topic: Scaling Postgres to 100TB
+*** Summary
+A walkthrough of moving from a single primary to tenant-based sharding.
+*** Notes
+- Shard key is tenant id
+*** Photos
+[[file:images/2025-01-15/091200-scaling-postgres.jpg][Scaling Postgres to 100TB 09:12]]
+*** Raw Input
+they shard by tenant id
 ```
 
 ## Deployment

@@ -1,4 +1,4 @@
-import { parseEntries } from './App';
+import { endOfToday, parseEntries, readStoredTopic, writeStoredTopic } from './App';
 
 const MARKDOWN = `## 2026-09-15 Tue
 
@@ -112,4 +112,50 @@ test('handles a day with no topics', () => {
   expect(entries[0].groups).toEqual([]);
   expect(entries[0].rawInput).toBe('just a thought');
   expect(entries[0].photos).toEqual([]);
+});
+
+describe('the daily topic cookie', () => {
+  beforeEach(() => {
+    document.cookie = 'journal_topic=; Max-Age=0; Path=/';
+  });
+
+  test('a topic set once is still there on the next page load', () => {
+    writeStoredTopic('Scaling Postgres');
+
+    expect(readStoredTopic()).toBe('Scaling Postgres');
+  });
+
+  test('survives characters a cookie cannot carry literally', () => {
+    writeStoredTopic('Rust, in production; part 2 = fun');
+
+    expect(document.cookie).not.toContain('production;');
+    expect(readStoredTopic()).toBe('Rust, in production; part 2 = fun');
+  });
+
+  test('clearing the topic clears the cookie', () => {
+    writeStoredTopic('Keynote');
+    writeStoredTopic('');
+
+    expect(readStoredTopic()).toBe('');
+    expect(document.cookie).not.toContain('journal_topic=');
+  });
+
+  test('no cookie means no topic, not a crash', () => {
+    expect(readStoredTopic()).toBe('');
+  });
+
+  test('a malformed cookie reads as no topic', () => {
+    document.cookie = 'journal_topic=%E0%A4%A; Path=/';
+
+    expect(readStoredTopic()).toBe('');
+  });
+
+  test("the topic is the day's, so it expires tonight", () => {
+    const now = new Date();
+    const midnight = endOfToday();
+
+    expect(midnight.getTime()).toBeGreaterThan(now.getTime());
+    expect(midnight.getDate()).toBe(now.getDate());
+    expect([midnight.getHours(), midnight.getMinutes()]).toEqual([23, 59]);
+  });
 });

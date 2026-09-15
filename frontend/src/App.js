@@ -5,7 +5,14 @@ import './App.css';
 // committed to the notes repo, so captures are downscaled before upload.
 const MAX_PHOTO_EDGE = 1600;
 const PHOTO_QUALITY = 0.85;
-const TOPIC_STORAGE_KEY = 'journal.topic';
+
+// The topic is remembered in a cookie so a talk's name is typed once, not once
+// per note. Keep the cap in step with sanitizeTopic in storage.go: a topic the
+// server would truncate anyway is not worth carrying around in a cookie.
+const TOPIC_COOKIE = 'journal_topic';
+const MAX_TOPIC_LENGTH = 120;
+// Where the topic used to be kept, cleared on load so it doesn't linger.
+const LEGACY_TOPIC_STORAGE_KEY = 'journal.topic';
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -83,18 +90,21 @@ function App() {
     }
   }, [isLoggedIn, fetchTopics]);
 
-  // The topic outlives a page reload so a whole talk's notes land together.
+  // The topic outlives a reload, a locked phone and a new tab, so a talk's
+  // notes land together without its name being retyped — but only until
+  // midnight, since it is the day's topic and not a standing setting.
+  useEffect(() => {
+    writeStoredTopic(topic);
+  }, [topic]);
+
+  // Drop the topic the localStorage version of this left behind.
   useEffect(() => {
     try {
-      if (topic) {
-        window.localStorage.setItem(TOPIC_STORAGE_KEY, topic);
-      } else {
-        window.localStorage.removeItem(TOPIC_STORAGE_KEY);
-      }
+      window.localStorage.removeItem(LEGACY_TOPIC_STORAGE_KEY);
     } catch (err) {
-      // Private browsing and blocked site data: the topic just won't persist.
+      // Private browsing and blocked site data: nothing to clean up.
     }
-  }, [topic]);
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -280,6 +290,7 @@ function App() {
                   className="topic-input"
                   list="known-topics"
                   autoComplete="off"
+                  maxLength={MAX_TOPIC_LENGTH}
                 />
                 {topic && (
                   <button type="button" className="topic-clear" onClick={() => setTopic('')}>
@@ -478,11 +489,35 @@ const downscaleImage = async (file) => {
   }
 };
 
-const readStoredTopic = () => {
+// Midnight tonight, in the phone's own timezone. The topic belongs to a single
+// day of notes, so it should not outlive that day.
+export const endOfToday = () => {
+  const midnight = new Date();
+  midnight.setHours(23, 59, 59, 999);
+  return midnight;
+};
+
+export const readStoredTopic = () => {
   try {
-    return window.localStorage.getItem(TOPIC_STORAGE_KEY) || '';
+    const prefix = `${TOPIC_COOKIE}=`;
+    const entry = document.cookie.split('; ').find((part) => part.startsWith(prefix));
+    return entry ? decodeURIComponent(entry.slice(prefix.length)) : '';
   } catch (err) {
+    // A cookie we can't read or decode is no reason to fail the form.
     return '';
+  }
+};
+
+export const writeStoredTopic = (topic) => {
+  // Secure is what a browser wants before it keeps a cookie on https, and it
+  // must be left off over plain http, which is how `make dev` serves the app.
+  const flags = `Path=/; SameSite=Lax${window.location.protocol === 'https:' ? '; Secure' : ''}`;
+  try {
+    document.cookie = topic
+      ? `${TOPIC_COOKIE}=${encodeURIComponent(topic)}; Expires=${endOfToday().toUTCString()}; ${flags}`
+      : `${TOPIC_COOKIE}=; Max-Age=0; ${flags}`;
+  } catch (err) {
+    // Blocked cookies: the topic just won't outlive the page.
   }
 };
 

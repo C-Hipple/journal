@@ -85,13 +85,15 @@ The application will be available at http://localhost:8080.
 
 ### Topics
 
-Set a **Topic** on the New Entry screen to group everything that follows under one heading for the day — a conference talk, a meeting, a chapter of a book. Topics already used today appear as chips, so a talk can be resumed with a tap, and the current topic survives a page reload. Leave the topic empty and entries are filed directly under the day, exactly as before.
+Set a **Topic** on the New Entry screen to group everything that follows under one heading for the day — a conference talk, a meeting, a chapter of a book. Topics already used today appear as chips, so a talk can be resumed with a tap, and the current topic is remembered so it only has to be typed once. Leave the topic empty and entries are filed directly under the day, exactly as before.
 
 What a topic changes:
 
 -   Every note (and photo) posted with that topic lands in the same topic block, rather than being appended as another entry for the day.
 -   When a new note arrives, the AI is given **all** of that topic's notes so far and asked to synthesize them as one session. The resulting summary **replaces** the topic's previous one — it doesn't stack up. A long talk therefore ends with a single coherent summary rather than a dozen fragments.
 -   The raw notes and photos are never rewritten; only the analysis sections are.
+
+The current topic is kept in a `journal_topic` cookie that expires at midnight, so it survives a reload, a locked phone or a second tab — the talk's name is typed once and every note that follows joins it — while yesterday's talk is never silently attached to this morning's notes. Clearing the topic clears the cookie.
 
 Topics are just headings in the file, so notes taken under a topic stay readable and greppable in plain Markdown or Org.
 

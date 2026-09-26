@@ -1,11 +1,18 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
+	"github.com/go-git/go-git/v5/plumbing/transport/server"
 )
 
 // setupStorageTest points storage at a temp directory with git disabled.
@@ -547,5 +554,149 @@ func TestTopicWithNewlineCannotForgeHeaders(t *testing.T) {
 	}
 	if strings.Count(content, dateHeader) != 1 {
 		t.Errorf("expected exactly one date header:\n%s", content)
+	}
+}
+
+// setupGitStorageTest turns git storage on, cloning from remoteURL (a local
+// repository, which may not exist yet) instead of GitHub. Local remotes are
+// served in-process, so the tests need neither the network nor a git binary.
+func setupGitStorageTest(t *testing.T, format string, remoteURL string) {
+	t.Helper()
+	setupStorageTest(t, format)
+	gitUsername, gitRepoName, githubToken = "someone", "journal-entries", "token"
+
+	origURL := storageRepoURL
+	storageRepoURL = func() string { return remoteURL }
+	origFile := client.Protocols["file"]
+	client.InstallProtocol("file", server.DefaultServer)
+	t.Cleanup(func() {
+		storageRepoURL = origURL
+		client.InstallProtocol("file", origFile)
+		gitUsername, gitRepoName, githubToken = "", "", ""
+	})
+}
+
+// newRemoteRepo creates a repository at dir with files committed, standing in
+// for the storage repo on GitHub.
+func newRemoteRepo(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	r, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit failed: %v", err)
+	}
+	w, err := r.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+		if _, err := w.Add(name); err != nil {
+			t.Fatalf("Add failed: %v", err)
+		}
+	}
+	author := &object.Signature{Name: "test", Email: "test@example.com", When: time.Now()}
+	if _, err := w.Commit("seed", &git.CommitOptions{Author: author}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+}
+
+// remoteFile returns a file as of the latest commit on the remote's branch.
+func remoteFile(t *testing.T, dir string, name string) string {
+	t.Helper()
+	r, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("PlainOpen failed: %v", err)
+	}
+	head, err := r.Head()
+	if err != nil {
+		t.Fatalf("Head failed: %v", err)
+	}
+	commit, err := r.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject failed: %v", err)
+	}
+	file, err := commit.File(name)
+	if err != nil {
+		t.Fatalf("%s not in the latest commit: %v", name, err)
+	}
+	content, err := file.Contents()
+	if err != nil {
+		t.Fatalf("Contents failed: %v", err)
+	}
+	return content
+}
+
+// When the clone at startup fails, go-git removes journal_storage, and every
+// entry used to fail with "open journal_storage/journal.org.tmp: no such file or
+// directory". The next write retries the clone instead, and lands on top of the
+// cloned history rather than replacing it.
+func TestWriteRetriesFailedStartupClone(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "journal-entries")
+	setupGitStorageTest(t, "org", filepath.Join(remote, ".git"))
+
+	// The storage repo can't be reached while the machine boots...
+	if err := initGitRepo(); err == nil {
+		t.Fatal("expected the startup clone to fail")
+	}
+	if _, err := os.Stat(repoDir); !os.IsNotExist(err) {
+		t.Fatalf("expected the failed clone to leave no %s behind, got stat err %v", repoDir, err)
+	}
+
+	// ...but it can by the time an entry is submitted.
+	const history = "* 2020-01-01 Wed\n** Raw Input\nan older entry\n"
+	newRemoteRepo(t, remote, map[string]string{"journal.org": history})
+
+	dateHeader := time.Now().Format(getDateHeaderFormat())
+	if err := SaveRawEntry("journal", "today's entry", dateHeader, ""); err != nil {
+		t.Fatalf("SaveRawEntry failed: %v", err)
+	}
+
+	content, err := GetEntries("journal")
+	if err != nil {
+		t.Fatalf("GetEntries failed: %v", err)
+	}
+	if !strings.HasPrefix(content, history) || !strings.Contains(content, "today's entry") {
+		t.Errorf("expected the entry added below the cloned history:\n%s", content)
+	}
+
+	pushed := remoteFile(t, remote, "journal.org")
+	if pushed != content {
+		t.Errorf("storage repo has:\n%s\nwant:\n%s", pushed, content)
+	}
+}
+
+// While the storage repo can't be cloned, writes report why, and nothing is
+// written into a plain directory that a later clone would land on top of.
+func TestWriteFailsWhileStorageRepoUnavailable(t *testing.T) {
+	setupGitStorageTest(t, "org", filepath.Join(t.TempDir(), "missing", ".git"))
+
+	if err := SaveRawEntry("journal", "an entry", "", ""); !errors.Is(err, transport.ErrRepositoryNotFound) {
+		t.Errorf("SaveRawEntry error = %v, want the clone failure", err)
+	}
+
+	png := []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("x", 64))
+	if _, err := SavePhoto(time.Now(), "Talk", png); !errors.Is(err, transport.ErrRepositoryNotFound) {
+		t.Errorf("SavePhoto error = %v, want the clone failure", err)
+	}
+
+	if _, err := os.Stat(repoDir); !os.IsNotExist(err) {
+		t.Errorf("expected nothing written to %s, got stat err %v", repoDir, err)
+	}
+}
+
+// With a storage repo named but no token to clone it with, git storage is off
+// and entries are kept in journal_storage locally, which may not exist yet.
+func TestWriteWithoutTokenCreatesStorageDir(t *testing.T) {
+	setupStorageTest(t, "org")
+	gitUsername, gitRepoName = "someone", "journal-entries"
+	t.Cleanup(func() { gitUsername, gitRepoName = "", "" })
+
+	if err := SaveRawEntry("journal", "an entry", "", ""); err != nil {
+		t.Fatalf("SaveRawEntry failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "journal.org")); err != nil {
+		t.Errorf("journal not written to %s: %v", repoDir, err)
 	}
 }

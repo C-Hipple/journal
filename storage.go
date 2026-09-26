@@ -131,14 +131,23 @@ func sanitizeTopic(topic string) string {
 	return topic
 }
 
-func initGitRepo() {
+// storageRepoURL is where the storage repo is cloned from. It's a variable so
+// tests can point it at a local repository.
+var storageRepoURL = func() string {
+	return fmt.Sprintf("https://github.com/%s/%s.git", gitUsername, gitRepoName)
+}
+
+// initGitRepo clones the storage repo, or pulls it when it is already on disk.
+// It returns an error when the repo can't be put on disk; a failed pull is only
+// logged, since the local copy is still usable.
+func initGitRepo() error {
 	log.Println("Initializing Git repo...")
 
 	// Try to open the repo
 	r, err := git.PlainOpen(repoDir)
 	if err == git.ErrRepositoryNotExists {
 		// Clone
-		repoURL := fmt.Sprintf("https://github.com/%s/%s.git", gitUsername, gitRepoName)
+		repoURL := storageRepoURL()
 		log.Printf("Cloning %s into %s...\n", repoURL, repoDir)
 
 		_, err := git.PlainClone(repoDir, false, &git.CloneOptions{
@@ -150,12 +159,10 @@ func initGitRepo() {
 			Progress: os.Stdout,
 		})
 		if err != nil {
-			log.Printf("Error cloning repo: %v", err)
-			return
+			return fmt.Errorf("cloning %s: %w", repoURL, err)
 		}
 	} else if err != nil {
-		log.Printf("Error opening repo: %v", err)
-		return
+		return fmt.Errorf("opening %s: %w", repoDir, err)
 	} else {
 		// Pull
 		log.Println("Pulling latest changes...")
@@ -188,6 +195,26 @@ func initGitRepo() {
 			}
 		}
 	}
+	return nil
+}
+
+// ensureStorage gets the storage directory ready to be written into. It must be
+// called with storageMutex held.
+//
+// With git storage on, the directory is the cloned repo. When the clone at
+// startup fails (an expired token, the network not up yet as the machine boots)
+// go-git deletes the half-made directory, so the clone is retried here rather
+// than leaving every write to fail against a directory that isn't there.
+func ensureStorage() error {
+	if !gitEnabled() {
+		return os.MkdirAll(storageRoot(), 0o755)
+	}
+	if _, err := git.PlainOpen(repoDir); err == git.ErrRepositoryNotExists {
+		if err := initGitRepo(); err != nil {
+			return fmt.Errorf("storage repo unavailable: %w", err)
+		}
+	}
+	return nil
 }
 
 func syncGit(message string) {
@@ -586,6 +613,13 @@ func applyToEntry(content string, dateHeader string, topic string, mutate func(b
 func updateJournal(entryType string, dateHeader string, topic string, commitMsg string, mutate func(block string, level sectionLevel) string) error {
 	storageMutex.Lock()
 	defer storageMutex.Unlock()
+
+	// Before reading: a journal read ahead of a late clone would come back
+	// empty, and writing that back would wipe the cloned history.
+	if err := ensureStorage(); err != nil {
+		log.Printf("Error preparing storage: %v", err)
+		return err
+	}
 
 	targetFile := journalPath(entryType)
 	existingContent, err := readJournal(entryType)

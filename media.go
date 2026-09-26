@@ -87,6 +87,10 @@ func SavePhoto(at time.Time, topic string, data []byte) (string, error) {
 	storageMutex.Lock()
 	defer storageMutex.Unlock()
 
+	if err := ensureStorage(); err != nil {
+		return "", err
+	}
+
 	relDir := photoDirFor(at)
 	absDir := filepath.Join(storageRoot(), filepath.FromSlash(relDir))
 	if err := os.MkdirAll(absDir, 0o755); err != nil {

@@ -190,7 +190,10 @@ func main() {
 	log.Printf("GIT_USERNAME: %s", gitUsername)
 	log.Printf("GIT_REPO_NAME: %s", gitRepoName)
 	if gitUsername != "" && gitRepoName != "" && githubToken != "" {
-		initGitRepo()
+		if err := initGitRepo(); err != nil {
+			// Not fatal: each write retries the clone until it succeeds.
+			log.Printf("Error setting up storage repo, will retry on the next write: %v", err)
+		}
 	} else {
 		log.Println("Warning: GIT_USERNAME, GIT_REPO_NAME, or GITHUB_TOKEN not set. Git storage disabled.")
 	}

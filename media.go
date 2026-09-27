@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,15 +25,18 @@ var imageExtByContentType = map[string]string{
 	"image/webp": ".webp",
 }
 
-// photoExtension returns the extension an upload should be stored under, or an
-// error if the bytes aren't a supported image.
-func photoExtension(data []byte) (string, error) {
-	contentType := strings.SplitN(http.DetectContentType(data), ";", 2)[0]
-	ext, ok := imageExtByContentType[strings.TrimSpace(contentType)]
+// errUnsupportedPhoto is returned for an upload that isn't a supported image.
+var errUnsupportedPhoto = errors.New("unsupported image type")
+
+// photoType returns an upload's content type and the extension it should be
+// stored under, or errUnsupportedPhoto if the bytes aren't a supported image.
+func photoType(data []byte) (contentType string, ext string, err error) {
+	contentType = strings.TrimSpace(strings.SplitN(http.DetectContentType(data), ";", 2)[0])
+	ext, ok := imageExtByContentType[contentType]
 	if !ok {
-		return "", fmt.Errorf("unsupported image type %q", contentType)
+		return "", "", fmt.Errorf("%w %q", errUnsupportedPhoto, contentType)
 	}
-	return ext, nil
+	return contentType, ext, nil
 }
 
 // slugify reduces a topic to a filename-safe fragment.
@@ -67,6 +71,17 @@ func photoDirFor(at time.Time) string {
 	return path.Join(imagesDir, at.Format("2006-01-02"))
 }
 
+// photoFileName names a photo taken at a given time for a topic. attempt tells
+// apart photos that would otherwise share a name, like two taken in the same
+// second.
+func photoFileName(at time.Time, topic string, ext string, attempt int) string {
+	base := fmt.Sprintf("%s-%s", at.Format("150405"), slugify(topic))
+	if attempt > 0 {
+		return fmt.Sprintf("%s-%d%s", base, attempt, ext)
+	}
+	return base + ext
+}
+
 // photoReference renders the link that points an entry at a stored photo.
 func photoReference(relPath string, caption string) string {
 	if journalFormat == "org" {
@@ -79,7 +94,7 @@ func photoReference(relPath string, caption string) string {
 // storage-relative path it was written to, using forward slashes so the path can
 // go straight into a Markdown or Org link.
 func SavePhoto(at time.Time, topic string, data []byte) (string, error) {
-	ext, err := photoExtension(data)
+	_, ext, err := photoType(data)
 	if err != nil {
 		return "", err
 	}
@@ -97,12 +112,8 @@ func SavePhoto(at time.Time, topic string, data []byte) (string, error) {
 		return "", err
 	}
 
-	base := fmt.Sprintf("%s-%s", at.Format("150405"), slugify(topic))
 	for attempt := 0; ; attempt++ {
-		name := base + ext
-		if attempt > 0 {
-			name = fmt.Sprintf("%s-%d%s", base, attempt, ext)
-		}
+		name := photoFileName(at, topic, ext, attempt)
 		absPath := filepath.Join(absDir, name)
 		// O_EXCL so two photos taken in the same second can't overwrite
 		// each other.
@@ -124,12 +135,23 @@ func SavePhoto(at time.Time, topic string, data []byte) (string, error) {
 	}
 }
 
-// mediaFilePath resolves a URL path under /api/media/ to a file on disk, or
-// returns ok=false for anything outside the images directory.
-func mediaFilePath(urlPath string) (string, bool) {
-	rel := path.Clean("/" + strings.TrimPrefix(urlPath, "/api/media/"))
+// cleanPhotoPath normalises the storage-relative path of a photo, as served
+// under /api/media/, or returns ok=false for anything outside the images
+// directory.
+func cleanPhotoPath(relPath string) (string, bool) {
+	rel := path.Clean("/" + relPath)
 	if !strings.HasPrefix(rel, "/"+imagesDir+"/") {
 		return "", false
 	}
-	return filepath.Join(storageRoot(), filepath.FromSlash(strings.TrimPrefix(rel, "/"))), true
+	return strings.TrimPrefix(rel, "/"), true
+}
+
+// photoFilePath resolves the storage-relative path of a photo to a file on
+// disk, or returns ok=false for anything outside the images directory.
+func photoFilePath(relPath string) (string, bool) {
+	rel, ok := cleanPhotoPath(relPath)
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(storageRoot(), filepath.FromSlash(rel)), true
 }

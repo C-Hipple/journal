@@ -25,4 +25,5 @@ docker-run:
 		-e GIT_USERNAME \
 		-e GIT_REPO_NAME \
 		-e GITHUB_TOKEN \
+		-e DATABASE_URL \
 		journal-app

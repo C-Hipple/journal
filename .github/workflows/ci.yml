@@ -34,6 +34,37 @@ jobs:
         with:
           version: latest
 
+  test-go:
+    name: Go Test
+    runs-on: ubuntu-latest
+    services:
+      # For the SQL storage tests, which create and drop their own databases.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          check-latest: true
+
+      - name: Run tests
+        run: go test -race ./...
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+
   build-and-lint-js:
     name: JS Build and Lint
     runs-on: ubuntu-latest

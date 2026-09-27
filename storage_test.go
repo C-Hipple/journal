@@ -495,25 +495,25 @@ func TestOrgPhotoReference(t *testing.T) {
 	}
 }
 
-func TestMediaFilePathRejectsTraversal(t *testing.T) {
+func TestPhotoFilePathRejectsTraversal(t *testing.T) {
 	setupStorageTest(t, "markdown")
 
-	if _, ok := mediaFilePath("/api/media/../journal.md"); ok {
+	if _, ok := photoFilePath("../journal.md"); ok {
 		t.Error("expected traversal outside the images directory to be rejected")
 	}
-	if _, ok := mediaFilePath("/api/media/images/../../journal.md"); ok {
+	if _, ok := photoFilePath("images/../../journal.md"); ok {
 		t.Error("expected traversal out of the images directory to be rejected")
 	}
-	if _, ok := mediaFilePath("/api/media/journal.md"); ok {
+	if _, ok := photoFilePath("journal.md"); ok {
 		t.Error("expected non-image paths to be rejected")
 	}
 
-	got, ok := mediaFilePath("/api/media/images/2026-09-15/120000-talk.jpg")
+	got, ok := photoFilePath("images/2026-09-15/120000-talk.jpg")
 	if !ok {
 		t.Fatal("expected a path inside the images directory to be served")
 	}
 	if want := filepath.FromSlash("images/2026-09-15/120000-talk.jpg"); got != want {
-		t.Errorf("mediaFilePath = %q, want %q", got, want)
+		t.Errorf("photoFilePath = %q, want %q", got, want)
 	}
 }
 

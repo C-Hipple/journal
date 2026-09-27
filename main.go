@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -189,13 +191,19 @@ func main() {
 	githubToken = os.Getenv("GITHUB_TOKEN")
 	log.Printf("GIT_USERNAME: %s", gitUsername)
 	log.Printf("GIT_REPO_NAME: %s", gitRepoName)
-	if gitUsername != "" && gitRepoName != "" && githubToken != "" {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if gitEnabled() {
 		if err := initGitRepo(); err != nil {
 			// Not fatal: each write retries the clone until it succeeds.
 			log.Printf("Error setting up storage repo, will retry on the next write: %v", err)
 		}
-	} else {
+	} else if databaseURL == "" {
 		log.Println("Warning: GIT_USERNAME, GIT_REPO_NAME, or GITHUB_TOKEN not set. Git storage disabled.")
+	}
+
+	store, err := openStore(databaseURL)
+	if err != nil {
+		log.Fatalf("Error setting up the database: %v", err)
 	}
 
 	// Serve static files
@@ -281,7 +289,7 @@ func main() {
 		}
 
 		entryType := resolveEntryType(r.URL.Query().Get("type"))
-		topics, err := ListTopics(entryType, time.Now().Format(getDateHeaderFormat()))
+		topics, err := store.ListTopics(r.Context(), entryType, time.Now())
 		if err != nil {
 			log.Printf("Error listing topics: %v", err)
 			http.Error(w, "Failed to list topics", http.StatusInternalServerError)
@@ -295,7 +303,7 @@ func main() {
 	})
 
 	// Photo attachments. The frontend posts a (downscaled) camera capture here;
-	// it is written into the storage repo and linked from the entry.
+	// it is stored alongside the entries and linked from the entry.
 	http.HandleFunc("/api/photos", func(w http.ResponseWriter, r *http.Request) {
 		if !isAuthenticated(r) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -329,20 +337,19 @@ func main() {
 		topic := sanitizeTopic(r.FormValue("topic"))
 
 		now := time.Now()
-		relPath, err := SavePhoto(now, topic, data)
-		if err != nil {
-			log.Printf("Error saving photo: %v", err)
-			http.Error(w, "Failed to save photo", http.StatusBadRequest)
-			return
-		}
-
 		caption := now.Format("15:04")
 		if topic != "" {
 			caption = topic + " " + caption
 		}
-		reference := photoReference(relPath, caption)
-		if err := SavePhotoReference(entryType, now.Format(getDateHeaderFormat()), topic, reference); err != nil {
-			http.Error(w, "Failed to record photo", http.StatusInternalServerError)
+		key := EntryKey{Type: entryType, Day: now, Topic: topic}
+		relPath, err := store.AddPhoto(r.Context(), key, now, caption, data)
+		if err != nil {
+			log.Printf("Error saving photo: %v", err)
+			status := http.StatusInternalServerError
+			if errors.Is(err, errUnsupportedPhoto) {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, "Failed to save photo", status)
 			return
 		}
 
@@ -360,12 +367,20 @@ func main() {
 			return
 		}
 
-		filePath, ok := mediaFilePath(r.URL.Path)
-		if !ok {
+		photo, err := store.GetPhoto(r.Context(), strings.TrimPrefix(r.URL.Path, "/api/media/"))
+		if errors.Is(err, errPhotoNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		http.ServeFile(w, r, filePath)
+		if err != nil {
+			log.Printf("Error loading photo %s: %v", r.URL.Path, err)
+			http.Error(w, "Failed to load photo", http.StatusInternalServerError)
+			return
+		}
+		if photo.ContentType != "" {
+			w.Header().Set("Content-Type", photo.ContentType)
+		}
+		http.ServeContent(w, r, photo.Name, photo.ModTime, bytes.NewReader(photo.Data))
 	})
 
 	http.HandleFunc("/api/entries", func(w http.ResponseWriter, r *http.Request) {
@@ -375,12 +390,10 @@ func main() {
 		}
 
 		if r.Method == http.MethodGet {
-			entryType := r.URL.Query().Get("type")
-			if entryType == "" {
-				entryType = "journal"
-			}
-			entries, err := GetEntries(entryType)
+			entryType := resolveEntryType(r.URL.Query().Get("type"))
+			entries, err := store.GetEntries(r.Context(), entryType)
 			if err != nil {
+				log.Printf("Error retrieving entries: %v", err)
 				http.Error(w, "Failed to retrieve entries", http.StatusInternalServerError)
 				return
 			}
@@ -404,41 +417,45 @@ func main() {
 			return
 		}
 
-		req.Type = resolveEntryType(req.Type)
-		topic := sanitizeTopic(req.Topic)
+		key := EntryKey{Type: resolveEntryType(req.Type), Day: time.Now(), Topic: sanitizeTopic(req.Topic)}
 
 		// Persist the raw input synchronously so it cannot be lost if AI
 		// processing fails, and so it is visible in the log immediately.
-		dateHeader := time.Now().Format(getDateHeaderFormat())
-		if err := SaveRawEntry(req.Type, req.Content, dateHeader, topic); err != nil {
+		entryID, err := store.SaveRawEntry(r.Context(), key, req.Content)
+		if err != nil {
+			log.Printf("Error saving entry: %v", err)
 			http.Error(w, "Failed to save entry", http.StatusInternalServerError)
 			return
 		}
 
 		// Enrich the saved entry with AI analysis asynchronously
-		go processEntry(req.Content, req.Type, dateHeader, topic)
+		go processEntry(store, key, entryID, req.Content)
 
 		writeJSON(w, map[string]string{"status": "created"})
 	})
 
 	log.Println("Listening on :8080...")
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
+	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal(err)
 	}
 }
 
+// processingTimeout bounds the storage calls made while processing an entry in
+// the background, where there's no request to cancel them. It leaves room for
+// the Gemini call in between.
+const processingTimeout = 2 * time.Minute
+
 // processEntry runs the AI pass over a newly saved entry. Without a topic that
 // means summarising the single note; with one it means re-synthesising every
 // note taken under that topic so far, replacing the topic's previous synthesis.
-func processEntry(content string, entryType string, dateHeader string, topic string) {
-	log.Printf("Processing %s entry (topic %q): %s\n", entryType, topic, content)
+func processEntry(store Store, key EntryKey, entryID int64, content string) {
+	log.Printf("Processing %s entry (topic %q): %s\n", key.Type, key.Topic, content)
 
-	config, ok := EntryTypes[entryType]
+	config, ok := EntryTypes[key.Type]
 	if !ok {
-		log.Printf("Unknown entry type: %s, falling back to journal\n", entryType)
+		log.Printf("Unknown entry type: %s, falling back to journal\n", key.Type)
 		config = EntryTypes["journal"]
-		entryType = "journal"
+		key.Type = "journal"
 	}
 
 	if geminiToken == "" {
@@ -446,22 +463,25 @@ func processEntry(content string, entryType string, dateHeader string, topic str
 		return
 	}
 
-	if topic != "" {
-		lock := synthesisLock(entryType + "\x00" + dateHeader + "\x00" + topic)
+	if key.Topic != "" {
+		lock := synthesisLock(key.Type + "\x00" + key.Day.Format("2006-01-02") + "\x00" + key.Topic)
 		lock.Lock()
 		defer lock.Unlock()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), processingTimeout)
+	defer cancel()
+
 	// A topic is summarised as a whole, from every note taken under it.
 	prompt := fmt.Sprintf(config.Prompt, content)
-	if topic != "" {
-		notes, err := GetTopicNotes(entryType, dateHeader, topic)
+	if key.Topic != "" {
+		notes, err := store.GetTopicNotes(ctx, key)
 		if err != nil {
-			log.Printf("Error reading notes for topic %q: %v", topic, err)
+			log.Printf("Error reading notes for topic %q: %v", key.Topic, err)
 		} else if strings.TrimSpace(notes) != "" {
 			prompt = fmt.Sprintf(config.Prompt, notes)
 		}
-		prompt = fmt.Sprintf(topicSynthesisPreamble, topic) + prompt
+		prompt = fmt.Sprintf(topicSynthesisPreamble, key.Topic) + prompt
 	}
 
 	jsonResponse, err := callGemini(prompt)
@@ -488,15 +508,15 @@ func processEntry(content string, entryType string, dateHeader string, topic str
 		delete(analysis, section)
 	}
 
-	if topic != "" {
-		if err := ReplaceTopicAnalysis(entryType, analysis, dateHeader, topic); err != nil {
-			log.Printf("Error saving synthesis for topic %q: %v", topic, err)
+	if key.Topic != "" {
+		if err := store.ReplaceTopicAnalysis(ctx, key, analysis); err != nil {
+			log.Printf("Error saving synthesis for topic %q: %v", key.Topic, err)
 		}
 		return
 	}
 
-	if err := SaveEntry(entryType, analysis, dateHeader, ""); err != nil {
-		log.Printf("Error saving analysis for %s entry: %v", entryType, err)
+	if err := store.SaveAnalysis(ctx, key, entryID, analysis); err != nil {
+		log.Printf("Error saving analysis for %s entry: %v", key.Type, err)
 	}
 }
 
@@ -513,8 +533,12 @@ func stripMarkdown(s string) string {
 // so a request that never returns would wedge every later note on that topic.
 var geminiClient = &http.Client{Timeout: 60 * time.Second}
 
+// geminiEndpoint is the model's generateContent URL. It's a variable so tests
+// can point it at a fake.
+var geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+
 func callGemini(prompt string) (string, error) {
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + geminiToken
+	url := geminiEndpoint + "?key=" + geminiToken
 
 	reqBody := GeminiRequest{
 		Contents: []GeminiContent{

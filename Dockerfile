@@ -17,6 +17,8 @@ COPY go.mod go.sum ./
 # Download dependencies (if any)
 RUN go mod download
 COPY *.go ./
+# The SQL migrations are embedded in the binary
+COPY migrations/ ./migrations/
 # Build the Go binary
 RUN go build -o journal .
 
@@ -43,6 +45,8 @@ EXPOSE 8080
 # - GEMINI_API_TOKEN
 # - GIT_USERNAME
 # - GIT_REPO_NAME
+# - GITHUB_TOKEN
+# - DATABASE_URL
 
 # Run the application
 ENTRYPOINT ["./journal"]
